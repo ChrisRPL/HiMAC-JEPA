@@ -104,6 +104,9 @@ def main():
 
     # Training loop placeholder
     for epoch in range(cfg.num_epochs):
+        running_total_loss = 0.0
+        running_predictive_loss = 0.0
+        running_vicreg_loss = 0.0
         for i, batch in enumerate(dataloader):
             optimizer.zero_grad()
 
@@ -141,7 +144,17 @@ def main():
             # 6. Add EMA target encoder updates
             update_ema_params(model, ema_model, decay=cfg.ema_decay)
 
-            print(f"Epoch {epoch}, Batch {i}: Total Loss: {total_loss.item():.4f}, Predictive Loss: {predictive_loss.item():.4f}, VICReg Loss: {vicreg_loss.item():.4f}")
+            running_total_loss += total_loss.item()
+            running_predictive_loss += predictive_loss.item()
+            running_vicreg_loss += vicreg_loss.item()
+
+            if i % 10 == 0: # Log every 10 batches
+                print(f"Epoch {epoch}, Batch {i}: Total Loss: {total_loss.item():.4f}, Predictive Loss: {predictive_loss.item():.4f}, VICReg Loss: {vicreg_loss.item():.4f}")
+        
+        avg_total_loss = running_total_loss / len(dataloader)
+        avg_predictive_loss = running_predictive_loss / len(dataloader)
+        avg_vicreg_loss = running_vicreg_loss / len(dataloader)
+        print(f"Epoch {epoch} Summary: Avg Total Loss: {avg_total_loss:.4f}, Avg Predictive Loss: {avg_predictive_loss:.4f}, Avg VICReg Loss: {avg_vicreg_loss:.4f}")
 
 if __name__ == "__main__":
     main()
