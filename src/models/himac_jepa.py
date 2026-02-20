@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .trajectory_planning_head import TrajectoryPlanningHead
+from .motion_prediction_head import MotionPredictionHead
 
 class CameraEncoder(nn.Module):
     """Vision Transformer based camera encoder."""
@@ -90,7 +92,9 @@ class HiMACJEPA(nn.Module):
         
         # Predictor and Distribution Head
         self.predictor = nn.TransformerEncoderLayer(d_model=config['model']['latent_dim'], nhead=8)
-        self.dist_head = nn.Linear(config['model']['latent_dim'], config['model']['latent_dim'] * 2) # mu and log_var
+        self.dist_head = nn.Linear(config["model"]["latent_dim"], config["model"]["latent_dim"] * 2) # mu and log_var
+        self.trajectory_head = TrajectoryPlanningHead(latent_dim=config["model"]["latent_dim"], output_dim=config["trajectory_head"]["output_dim"])
+        self.motion_prediction_head = MotionPredictionHead(latent_dim=config["model"]["latent_dim"], output_dim=config["motion_prediction_head"]["output_dim"])
 
     def forward(self, camera, lidar, radar, actions=None):
         cam_feat = self.camera_encoder(camera)
@@ -105,4 +109,6 @@ class HiMACJEPA(nn.Module):
         dist_params = self.dist_head(pred_out)
         mu, log_var = torch.chunk(dist_params, 2, dim=-1)
         
-        return mu, log_var
+        trajectory = self.trajectory_head(mu)
+        motion_predictions = self.motion_prediction_head(mu)
+        return mu, log_var, trajectory, motion_predictions
