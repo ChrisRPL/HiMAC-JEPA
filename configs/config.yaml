@@ -32,3 +32,6 @@ training:
   learning_rate: 1e-4
   weight_decay: 0.05
   mask_ratio: 0.75
+
+motion_prediction_head:
+  output_dim: 60 # Example: 15 future timesteps * 2 (x,y coords) * 2 agents
