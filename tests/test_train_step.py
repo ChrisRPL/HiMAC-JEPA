@@ -59,7 +59,7 @@ def test_training_step():
 
     # Loss calculation
     predictive_loss = predictive_loss_fn(mu, log_var, target_latent, torch.zeros_like(log_var))
-    vicreg_loss = vicreg_loss_fn(mu)
+    vicreg_loss = vicreg_loss_fn(mu, target_latent)
     total_loss = predictive_loss + vicreg_loss
 
     # Backward pass and optimizer step
@@ -83,7 +83,7 @@ def test_training_step():
         ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, actions)
         target_latent = ema_mu.detach()
     predictive_loss = predictive_loss_fn(mu, log_var, target_latent, torch.zeros_like(log_var))
-    vicreg_loss = vicreg_loss_fn(mu)
+    vicreg_loss = vicreg_loss_fn(mu, target_latent)
     total_loss = predictive_loss + vicreg_loss
     optimizer.zero_grad()
     total_loss.backward()

@@ -129,10 +129,11 @@ def main():
             # 2. Compute predictive loss
             # For now, let's assume target_latent is available in the batch for predictive loss
             # In a true JEPA setup, target_latent would be derived from a target encoder or masked input
-            predictive_loss = predictive_loss_fn(mu, log_var, target_latent)
+            # Assuming target_latent is mu_q, and we use a dummy log_var_q (e.g., zeros)
+            predictive_loss = predictive_loss_fn(mu, log_var, target_latent, torch.zeros_like(log_var))
 
             # 3. Compute VICReg regularization loss from latent representations
-            vicreg_loss = vicreg_loss_fn(mu)
+            vicreg_loss = vicreg_loss_fn(mu, target_latent)
 
             # 4. Combine losses into total loss for backpropagation
             total_loss = predictive_loss + vicreg_loss
