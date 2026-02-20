@@ -36,6 +36,6 @@ class BEVSemanticSegmentationHead(nn.Module):
         segmentation_map = self.deconv3(x)
         
         # Resize to target BEV dimensions
-        segmentation_map = F.interpolate(segmentation_map, size=(self.bev_h, self.bev_w), mode=\'bilinear\', align_corners=False)
+        segmentation_map = F.interpolate(segmentation_map, size=(self.bev_h, self.bev_w), mode='bilinear', align_corners=False)
 
         return segmentation_map
