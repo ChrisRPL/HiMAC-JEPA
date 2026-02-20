@@ -35,3 +35,12 @@ training:
 
 motion_prediction_head:
   output_dim: 60 # Example: 15 future timesteps * 2 (x,y coords) * 2 agents
+
+trajectory_head:
+  output_dim: 30 # Example: 15 future timesteps * 2 (x,y coordinates)
+motion_prediction_head:
+  output_dim: 60 # Example: 15 future timesteps * 2 (x,y coords) * 2 agents
+bev_segmentation_head:
+  bev_h: 200
+  bev_w: 200
+  num_classes: 10 # Example: 10 semantic classes
