@@ -8,6 +8,11 @@ from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 
 # Configuration (will be replaced by Hydra later)
+def update_ema_params(model, ema_model, decay):
+    with torch.no_grad():
+        for ema_p, model_p in zip(ema_model.parameters(), model.parameters()):
+            ema_p.mul_(decay).add_(model_p, alpha=1 - decay)
+
 class Config:
     # Model parameters
     latent_dim = 128
@@ -38,6 +43,7 @@ class Config:
     lambda_param = 25.0  # VICReg invariance
     mu_param = 25.0      # VICReg variance
     nu_param = 1.0       # VICReg covariance
+    ema_decay = 0.999    # EMA decay rate
 
 def main():
     cfg = Config()
@@ -76,6 +82,10 @@ def main():
         },
     }
     model = HiMACJEPA(model_config)
+    ema_model = HiMACJEPA(model_config) # Initialize EMA model
+    ema_model.load_state_dict(model.state_dict()) # Copy initial weights
+    for param in ema_model.parameters():
+        param.requires_grad = False # EMA model is not trained via backprop
 
     print("Model instantiated successfully:")
     print(model)
@@ -90,14 +100,48 @@ def main():
     print("Loss functions instantiated successfully.")
     print("Optimizer instantiated successfully.")
 
+    print("EMA model instantiated and initialized.")
+
     # Training loop placeholder
     for epoch in range(cfg.num_epochs):
         for i, batch in enumerate(dataloader):
-            # Dummy forward pass and loss calculation
-            # This will be properly implemented in the next phase
-            print(f"Epoch {epoch}, Batch {i}: Data loaded.")
-            break # Break after first batch for testing
-        break # Break after first epoch for testing
+            optimizer.zero_grad()
+
+            # Assuming batch contains (camera, lidar, radar, actions, target_latent_representation)
+            # The actual structure of the batch needs to be confirmed from dataset.py and collate_fn
+            camera = batch['camera']
+            lidar = batch['lidar']
+            radar = batch['radar']
+            # Combine strategic and tactical actions for the model input
+            actions = torch.cat((batch['strategic_action'].unsqueeze(1).float(), batch['tactical_action']), dim=1)
+
+            # 1. Feed multi-modal inputs into the HiMACJEPA model
+            mu, log_var, _, _, _ = model(camera, lidar, radar, actions)
+
+            # Use EMA model to get target latent representation
+            with torch.no_grad():
+                ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, actions)
+                target_latent = ema_mu.detach()
+
+            # 2. Compute predictive loss
+            # For now, let's assume target_latent is available in the batch for predictive loss
+            # In a true JEPA setup, target_latent would be derived from a target encoder or masked input
+            predictive_loss = predictive_loss_fn(mu, log_var, target_latent)
+
+            # 3. Compute VICReg regularization loss from latent representations
+            vicreg_loss = vicreg_loss_fn(mu)
+
+            # 4. Combine losses into total loss for backpropagation
+            total_loss = predictive_loss + vicreg_loss
+
+            # 5. Perform backward pass and optimizer step
+            total_loss.backward()
+            optimizer.step()
+
+            # 6. Add EMA target encoder updates
+            update_ema_params(model, ema_model, decay=cfg.ema_decay)
+
+            print(f"Epoch {epoch}, Batch {i}: Total Loss: {total_loss.item():.4f}, Predictive Loss: {predictive_loss.item():.4f}, VICReg Loss: {vicreg_loss.item():.4f}")
 
 if __name__ == "__main__":
     main()
