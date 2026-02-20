@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .trajectory_planning_head import TrajectoryPlanningHead
 from .motion_prediction_head import MotionPredictionHead
+from .bev_semantic_segmentation_head import BEVSemanticSegmentationHead
 
 class CameraEncoder(nn.Module):
     """Vision Transformer based camera encoder."""
@@ -95,6 +96,7 @@ class HiMACJEPA(nn.Module):
         self.dist_head = nn.Linear(config["model"]["latent_dim"], config["model"]["latent_dim"] * 2) # mu and log_var
         self.trajectory_head = TrajectoryPlanningHead(latent_dim=config["model"]["latent_dim"], output_dim=config["trajectory_head"]["output_dim"])
         self.motion_prediction_head = MotionPredictionHead(latent_dim=config["model"]["latent_dim"], output_dim=config["motion_prediction_head"]["output_dim"])
+        self.bev_segmentation_head = BEVSemanticSegmentationHead(latent_dim=config["model"]["latent_dim"], bev_h=config["bev_segmentation_head"]["bev_h"], bev_w=config["bev_segmentation_head"]["bev_w"], num_classes=config["bev_segmentation_head"]["num_classes"])
 
     def forward(self, camera, lidar, radar, actions=None):
         cam_feat = self.camera_encoder(camera)
@@ -111,4 +113,5 @@ class HiMACJEPA(nn.Module):
         
         trajectory = self.trajectory_head(mu)
         motion_predictions = self.motion_prediction_head(mu)
-        return mu, log_var, trajectory, motion_predictions
+        bev_segmentation_map = self.bev_segmentation_head(mu)
+        return mu, log_var, trajectory, motion_predictions, bev_segmentation_map
