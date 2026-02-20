@@ -1,0 +1,34 @@
+model:
+  name: "himac_jepa"
+  latent_dim: 512
+  camera_encoder:
+    type: "vit"
+    patch_size: 16
+    embed_dim: 768
+    depth: 12
+    num_heads: 12
+  lidar_encoder:
+    type: "pointnet2"
+    out_channels: 512
+  radar_encoder:
+    type: "cnn"
+    out_channels: 256
+  fusion:
+    type: "cross_attention"
+    num_heads: 8
+  predictor:
+    depth: 6
+    num_heads: 8
+
+data:
+  dataset: "nuscenes"
+  batch_size: 32
+  num_workers: 4
+  image_size: [224, 224]
+  num_points: 1024
+
+training:
+  epochs: 100
+  learning_rate: 1e-4
+  weight_decay: 0.05
+  mask_ratio: 0.75
