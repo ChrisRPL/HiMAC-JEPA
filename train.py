@@ -46,6 +46,11 @@ class Config:
     nu_param = 1.0       # VICReg covariance
     ema_decay = 0.999    # EMA decay rate
 
+    # Masking parameters
+    mask_ratio_spatial = 0.75
+    mask_ratio_temporal = 0.5
+    use_masking = True  # Enable JEPA masking
+
 def main():
     cfg = Config()
 
