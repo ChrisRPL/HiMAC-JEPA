@@ -239,6 +239,126 @@ Rejection reasons:
 ============================================================
 ```
 
+### Ground Truth Label Extraction
+
+HiMAC-JEPA supports **ground truth label extraction** from nuScenes for downstream task evaluation. Labels are extracted for trajectory prediction, BEV segmentation, and motion prediction tasks.
+
+**Label Types:**
+1. **Trajectory Prediction**: Future ego and agent waypoints at 1s, 2s, 3s horizons
+2. **BEV Segmentation**: Semantic map with 6 classes (drivable area, lanes, crossings, vehicles, pedestrians)
+3. **Motion Prediction**: Multi-agent future trajectories with current states and valid masks
+
+**Enable label extraction during training:**
+```bash
+# Extract labels on-the-fly during training
+python train.py data=nuscenes data.labels.enabled=true
+
+# Combine with temporal training
+python train.py data=nuscenes data.temporal.enabled=true data.labels.enabled=true
+```
+
+**Pre-extract labels for entire dataset (recommended):**
+```bash
+# Extract for train split with 8 workers
+python scripts/extract_labels.py --split train --workers 8
+
+# Extract for all splits
+python scripts/extract_labels.py --split all --workers 8
+
+# Extract with custom parameters
+python scripts/extract_labels.py \
+    --split train \
+    --workers 16 \
+    --bev-size 256 256 \
+    --bev-range 75.0 \
+    --motion-horizon 5.0
+
+# Force recomputation (bypass cache)
+python scripts/extract_labels.py --split train --workers 8 --force
+```
+
+**Label Configuration:**
+```yaml
+labels:
+  enabled: true
+
+  trajectory:
+    pred_horizons: [1.0, 2.0, 3.0]  # Prediction horizons in seconds
+    include_ego: true
+    include_agents: true
+    max_agents: 20
+
+  bev:
+    size: [200, 200]  # BEV image size (pixels)
+    range: 50.0       # BEV range (meters)
+    classes:
+      - background
+      - drivable_area
+      - lane_divider
+      - pedestrian_crossing
+      - vehicle
+      - pedestrian
+
+  motion:
+    pred_horizon: 3.0      # Prediction horizon (seconds)
+    max_distance: 50.0     # Max tracking distance (meters)
+    min_visibility: 0.5    # Min visibility score (0-4)
+
+  cache:
+    enabled: true
+    cache_dir: "./cache/labels"
+    force_recompute: false
+```
+
+**Label Output Format:**
+```python
+labels = {
+    'trajectory_ego': {
+        1.0: np.ndarray,  # (T, 2) waypoints at 1s
+        2.0: np.ndarray,  # (T, 2) waypoints at 2s
+        3.0: np.ndarray   # (T, 2) waypoints at 3s
+    },
+    'trajectory_agents': {
+        'agent_id_1': {
+            'class': 'vehicle.car',
+            'current_pos': np.ndarray,      # (2,) [x, y]
+            'current_vel': np.ndarray,      # (2,) [vx, vy]
+            'trajectories': {1.0: ..., 2.0: ..., 3.0: ...}
+        },
+        ...
+    },
+    'bev': np.ndarray,  # (H, W) segmentation mask
+    'motion': {
+        'agent_ids': [...],
+        'agent_classes': [...],
+        'current_states': np.ndarray,        # (N, 4) [x, y, vx, vy]
+        'future_trajectories': np.ndarray,   # (N, T, 2)
+        'valid_masks': np.ndarray            # (N, T) boolean
+    }
+}
+```
+
+**Cache Performance:**
+- **Initial extraction**: ~10-20 sec per sample (with map rendering)
+- **With cache**: <0.1 sec per sample (disk read only)
+- **Cache size**: ~500MB for v1.0-mini, ~15GB for v1.0-trainval
+
+**Extraction Statistics Example:**
+```
+============================================================
+Extraction complete for TRAIN split
+============================================================
+Successful:     404/404
+Failed:         0
+Time elapsed:   3245.2s
+Time per sample: 8.03s
+
+Cache statistics:
+  Cached samples: 404
+  Total size:     512.34 MB
+============================================================
+```
+
 ### Ablation Studies
 
 Test individual component contributions:
@@ -299,7 +419,9 @@ python train.py data=nuscenes wandb.enabled=true
 - [x] Temporal Sequence Loading & Future Prediction
 - [x] Temporal Fusion with Transformer Aggregation
 - [x] Comprehensive Temporal Validation (Continuity, Timestamps, Sensors)
-- [ ] Ground Truth Label Extraction (Trajectory, BEV, Motion)
+- [x] Ground Truth Label Extraction (Trajectory, BEV, Motion)
+- [x] Label Caching System for Fast Loading
+- [x] Parallel Label Extraction Script
 - [ ] Baseline Comparison Implementations
 - [ ] Waymo Open Dataset Integration
 - [ ] CARLA Closed-Loop Evaluation
