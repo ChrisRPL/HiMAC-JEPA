@@ -154,6 +154,91 @@ python scripts/evaluate.py evaluation.checkpoint_path=checkpoints/best_model.pth
 - **BEV Segmentation mIoU**: Mean intersection over union for bird's-eye-view segmentation
 - **Motion Prediction mAP**: Mean average precision at different distance thresholds
 
+### Temporal Sequence Training
+
+HiMAC-JEPA supports **temporal JEPA training** on multi-frame sequences, where the model learns to predict future latent representations from past context frames. This enhances the model's ability to capture temporal dynamics and make long-term predictions.
+
+**Enable temporal training:**
+```bash
+# Default: 5 context frames + 3 future frames
+python train.py data=nuscenes data.temporal.enabled=true
+
+# Customize sequence length
+python train.py data=nuscenes data.temporal.enabled=true \
+    data.temporal.seq_length=10 \
+    data.temporal.pred_horizon=5
+
+# Adjust frame skip (use every Nth frame)
+python train.py data=nuscenes data.temporal.enabled=true \
+    data.temporal.frame_skip=2  # Use every other frame (1Hz instead of 2Hz)
+```
+
+**Temporal configuration parameters:**
+```yaml
+temporal:
+  enabled: false              # Enable temporal mode
+  seq_length: 5               # Number of context frames (past)
+  pred_horizon: 3             # Number of future frames to predict
+  frame_skip: 1               # Use every Nth frame (1 = all frames)
+  min_scene_length: 10        # Skip scenes with fewer samples
+```
+
+**How temporal mode works:**
+1. **Sequence Construction**: Dataset builds sliding windows of (context, target) pairs
+   - Context: Past frames used to predict future
+   - Target: Future frames the model tries to predict
+
+2. **Validation**: Each sequence is validated for:
+   - Temporal continuity (no gaps in sample chain)
+   - Timestamp consistency (uniform time intervals, max 0.6s gap)
+   - Sensor availability (camera, LiDAR, radar present)
+
+3. **Training Objective**:
+   - **Online encoder**: Processes context frames → predicts future latent
+   - **Target encoder (EMA)**: Processes target frames → provides ground truth latent
+   - **Loss**: KL divergence + VICReg between predicted and target latents
+
+**Temporal data shapes:**
+- Single-frame mode: `camera: (B, C, H, W)`
+- Temporal mode: `camera: (B, T, C, H, W)` where `T` is sequence length
+
+**Example workflow:**
+```bash
+# 1. Train single-frame baseline
+python train.py data=nuscenes
+
+# 2. Train temporal model (5→3 frames)
+python train.py data=nuscenes data.temporal.enabled=true \
+    experiment_name=temporal-5-3
+
+# 3. Train longer sequences (10→5 frames)
+python train.py data=nuscenes data.temporal.enabled=true \
+    data.temporal.seq_length=10 \
+    data.temporal.pred_horizon=5 \
+    experiment_name=temporal-10-5
+
+# 4. Evaluate temporal predictions
+python scripts/evaluate.py evaluation.checkpoint_path=checkpoints/temporal-5-3.pth
+```
+
+**Validation statistics:**
+
+After building sequences, you'll see validation summary:
+```
+============================================================
+Temporal Sequence Validation Summary
+============================================================
+Total candidates:        1250
+Valid sequences:         1180
+Valid ratio:             94.40%
+
+Rejection reasons:
+  - Sample gaps:         45
+  - Timestamp issues:    15
+  - Missing sensors:     10
+============================================================
+```
+
 ### Ablation Studies
 
 Test individual component contributions:
@@ -173,6 +258,10 @@ python train.py +experiment=ablation_no_actions data=nuscenes
 
 # No masking (supervised learning)
 python train.py +experiment=ablation_no_masking data=nuscenes
+
+# Single-frame vs temporal comparison
+python train.py +experiment=ablation_camera_only data=nuscenes  # Baseline
+python train.py +experiment=ablation_camera_only data=nuscenes data.temporal.enabled=true  # Temporal
 ```
 
 ### Weights & Biases Integration
@@ -207,6 +296,11 @@ python train.py data=nuscenes wandb.enabled=true
 - [x] Evaluation Metrics (Intrinsic & Downstream)
 - [x] Ablation Study Configurations
 - [x] Weights & Biases Integration
+- [x] Temporal Sequence Loading & Future Prediction
+- [x] Temporal Fusion with Transformer Aggregation
+- [x] Comprehensive Temporal Validation (Continuity, Timestamps, Sensors)
+- [ ] Ground Truth Label Extraction (Trajectory, BEV, Motion)
+- [ ] Baseline Comparison Implementations
 - [ ] Waymo Open Dataset Integration
 - [ ] CARLA Closed-Loop Evaluation
 - [ ] Multi-GPU Distributed Training
