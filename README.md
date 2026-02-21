@@ -359,6 +359,88 @@ Cache statistics:
 ============================================================
 ```
 
+### Baseline Models for Comparison
+
+HiMAC-JEPA includes 5 baseline models for comprehensive comparison:
+
+**Single-Modal Baselines:**
+1. **Camera-Only**: ResNet18 + LSTM, supervised future frame prediction
+2. **LiDAR-Only**: Simplified PointNet++, supervised future cloud prediction
+3. **Radar-Only**: 3D CNN, supervised future radar prediction
+
+**JEPA Baselines:**
+4. **I-JEPA**: Image JEPA (camera-only) with spatial masking, no action conditioning
+5. **V-JEPA**: Multi-modal JEPA with temporal prediction, no action conditioning
+
+**Training Baselines:**
+```bash
+# Train camera-only baseline
+python scripts/train_baselines.py --model camera_only
+
+# Train LiDAR-only baseline
+python scripts/train_baselines.py --model lidar_only
+
+# Train radar-only baseline
+python scripts/train_baselines.py --model radar_only
+
+# Train I-JEPA baseline (camera + JEPA)
+python scripts/train_baselines.py --model ijepa
+
+# Train V-JEPA baseline (multi-modal + JEPA)
+python scripts/train_baselines.py --model vjepa
+
+# Override hyperparameters
+python scripts/train_baselines.py --model vjepa --epochs 200 --lr 1e-3 --batch-size 64
+
+# Disable W&B logging
+python scripts/train_baselines.py --model camera_only --no-wandb
+```
+
+**Evaluating Baselines:**
+```bash
+# Evaluate all baselines
+python scripts/evaluate_baselines.py \
+  --models camera_only lidar_only radar_only ijepa vjepa himac_jepa \
+  --checkpoints \
+    checkpoints/baselines/camera_only/best_model.pth \
+    checkpoints/baselines/lidar_only/best_model.pth \
+    checkpoints/baselines/radar_only/best_model.pth \
+    checkpoints/baselines/ijepa/best_model.pth \
+    checkpoints/baselines/vjepa/best_model.pth \
+    checkpoints/himac_jepa/best_model.pth \
+  --output-dir results/baselines
+
+# Results saved to:
+# - results/baselines/metrics.csv             (raw metrics)
+# - results/baselines/comparison_table.txt    (human-readable)
+# - results/baselines/comparison_table.tex    (LaTeX for papers)
+# - results/baselines/plots/*.png             (comparison plots)
+# - results/baselines/statistical_tests.txt   (significance tests)
+```
+
+**Expected Performance Hierarchy** (based on method design):
+```
+Trajectory Prediction (ADE ↓):
+  HiMAC-JEPA < V-JEPA < I-JEPA < Camera-Only < LiDAR-Only < Radar-Only
+
+BEV Segmentation (mIoU ↑):
+  HiMAC-JEPA > V-JEPA > Camera-Only > I-JEPA > LiDAR-Only > Radar-Only
+
+Motion Prediction (mAP ↑):
+  HiMAC-JEPA > V-JEPA > LiDAR-Only > I-JEPA > Camera-Only > Radar-Only
+
+Inference Time (ms ↓):
+  Radar-Only < Camera-Only < LiDAR-Only < I-JEPA < V-JEPA < HiMAC-JEPA
+```
+
+**Key Comparisons:**
+- **Single vs Multi-modal**: Shows benefit of sensor fusion
+- **Supervised vs JEPA**: Shows benefit of self-supervised representation learning
+- **No Actions vs HiMAC-JEPA**: Shows benefit of hierarchical action conditioning
+- **Simple Fusion (V-JEPA) vs Hierarchical (HiMAC-JEPA)**: Shows benefit of hierarchical multi-modal architecture
+
+See `docs/BASELINES.md` for detailed baseline documentation and results.
+
 ### Ablation Studies
 
 Test individual component contributions:
@@ -422,7 +504,11 @@ python train.py data=nuscenes wandb.enabled=true
 - [x] Ground Truth Label Extraction (Trajectory, BEV, Motion)
 - [x] Label Caching System for Fast Loading
 - [x] Parallel Label Extraction Script
-- [ ] Baseline Comparison Implementations
+- [x] Baseline Implementations (Camera-Only, LiDAR-Only, Radar-Only, I-JEPA, V-JEPA)
+- [x] Baseline Training Script with Config System
+- [x] Baseline Evaluation & Comparison Script
+- [x] Publication-Ready Comparison Tables & Plots
+- [ ] Actual Baseline Training & Results (requires dataset)
 - [ ] Waymo Open Dataset Integration
 - [ ] CARLA Closed-Loop Evaluation
 - [ ] Multi-GPU Distributed Training
