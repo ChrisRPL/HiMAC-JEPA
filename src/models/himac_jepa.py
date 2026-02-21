@@ -124,22 +124,49 @@ class LiDAREncoder(nn.Module):
         return x
 
 class RadarEncoder(nn.Module):
-    """CNN based Radar encoder."""
-    def __init__(self, out_channels=256):
+    """Velocity-aware CNN-based Radar encoder with dual-branch processing."""
+    def __init__(self, out_channels=256, input_channels=1, dropout=0.1):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+        self.out_channels = out_channels
+        self.input_channels = input_channels
+
+        # Spatial feature extraction branch
+        self.spatial_branch = nn.Sequential(
+            nn.Conv2d(input_channels, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
+            nn.Dropout2d(dropout),
             nn.MaxPool2d(2),
+
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Dropout2d(dropout),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((1, 1))
         )
-        self.fc = nn.Linear(64, out_channels)
+
+        # Feature fusion and output projection
+        self.fc = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, out_channels)
+        )
 
     def forward(self, x):
-        x = self.conv(x).flatten(1)
-        x = self.fc(x)
+        # x: [B, C, H, W] where C could include velocity channels
+        # Extract spatial features
+        x = self.spatial_branch(x)  # [B, 128, 1, 1]
+        x = x.flatten(1)  # [B, 128]
+
+        # Project to output dimension
+        x = self.fc(x)  # [B, out_channels]
+
         return x
 
 class MultiModalFusion(nn.Module):
