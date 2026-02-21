@@ -23,18 +23,39 @@ def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
 
     # 1. Data Loading
-    # Create config dict compatible with dataset (using Hydra config)
-    dataset_config = {
-        'data': {
-            'batch_size': cfg.data.batch_size,
-            'num_workers': cfg.data.num_workers,
-            'augmentation': False,
-            'num_samples': 10,
-            'lidar_points': cfg.data.num_points
+    # Select dataset based on config
+    if cfg.data.dataset == 'nuscenes':
+        # Use nuScenes dataset
+        from src.data.nuscenes_dataset import NuScenesMultiModalDataset
+        train_dataset = NuScenesMultiModalDataset(cfg.data, split='train')
+        # nuScenes dataset already returns properly formatted batches
+        dataloader = DataLoader(
+            train_dataset,
+            batch_size=cfg.data.batch_size,
+            shuffle=True,
+            num_workers=cfg.data.num_workers
+        )
+        print(f"Using nuScenes dataset: {len(train_dataset)} samples")
+    else:
+        # Use dummy dataset (default)
+        dataset_config = {
+            'data': {
+                'batch_size': cfg.data.batch_size,
+                'num_workers': cfg.data.num_workers,
+                'augmentation': False,
+                'num_samples': 10,
+                'lidar_points': cfg.data.num_points
+            }
         }
-    }
-    dataset = MultiModalDrivingDataset(dataset_config)
-    dataloader = DataLoader(dataset, batch_size=cfg.data.batch_size, shuffle=True, num_workers=cfg.data.num_workers, collate_fn=collate_fn)
+        dataset = MultiModalDrivingDataset(dataset_config)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=cfg.data.batch_size,
+            shuffle=True,
+            num_workers=cfg.data.num_workers,
+            collate_fn=collate_fn
+        )
+        print(f"Using dummy dataset: {len(dataset)} samples")
 
     # 2. Model Instantiation
     # Convert Hydra config to dict format expected by model
