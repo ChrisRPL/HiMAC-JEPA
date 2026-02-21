@@ -3,6 +3,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import wandb
 
 from src.models.himac_jepa import HiMACJEPA
 from src.data.dataset import MultiModalDrivingDataset, collate_fn
@@ -21,6 +22,19 @@ def main(cfg: DictConfig):
     # Print configuration
     print("Configuration:")
     print(OmegaConf.to_yaml(cfg))
+
+    # Initialize Weights & Biases
+    if cfg.get('wandb', {}).get('enabled', False):
+        wandb.init(
+            project=cfg.wandb.get('project', 'himac-jepa'),
+            entity=cfg.wandb.get('entity', None),
+            name=cfg.get('experiment_name', 'himac-jepa-run'),
+            config=OmegaConf.to_container(cfg, resolve=True),
+            tags=cfg.wandb.get('tags', [])
+        )
+        print("Weights & Biases initialized")
+    else:
+        print("Weights & Biases logging disabled")
 
     # 1. Data Loading
     # Select dataset based on config
@@ -158,11 +172,35 @@ def main(cfg: DictConfig):
 
             if i % 10 == 0: # Log every 10 batches
                 print(f"Epoch {epoch}, Batch {i}: Total Loss: {total_loss.item():.4f}, Predictive Loss: {predictive_loss.item():.4f}, VICReg Loss: {vicreg_loss.item():.4f}")
-        
+
+                # Log to W&B
+                if cfg.get('wandb', {}).get('enabled', False):
+                    wandb.log({
+                        "train/total_loss": total_loss.item(),
+                        "train/predictive_loss": predictive_loss.item(),
+                        "train/vicreg_loss": vicreg_loss.item(),
+                        "train/epoch": epoch,
+                        "train/batch": i
+                    })
+
         avg_total_loss = running_total_loss / len(dataloader)
         avg_predictive_loss = running_predictive_loss / len(dataloader)
         avg_vicreg_loss = running_vicreg_loss / len(dataloader)
         print(f"Epoch {epoch} Summary: Avg Total Loss: {avg_total_loss:.4f}, Avg Predictive Loss: {avg_predictive_loss:.4f}, Avg VICReg Loss: {avg_vicreg_loss:.4f}")
+
+        # Log epoch summary to W&B
+        if cfg.get('wandb', {}).get('enabled', False):
+            wandb.log({
+                "epoch/avg_total_loss": avg_total_loss,
+                "epoch/avg_predictive_loss": avg_predictive_loss,
+                "epoch/avg_vicreg_loss": avg_vicreg_loss,
+                "epoch": epoch
+            })
+
+    # Finish W&B run
+    if cfg.get('wandb', {}).get('enabled', False):
+        wandb.finish()
+        print("Weights & Biases run finished")
 
 if __name__ == "__main__":
     main()
