@@ -19,6 +19,13 @@ model:
   predictor:
     depth: 6
     num_heads: 8
+  action_encoder:
+    strategic_vocab_size: 10
+    tactical_dim: 3
+    latent_dim: 128
+    num_heads: 8
+    depth: 2
+    dropout: 0.1
 
 data:
   dataset: "nuscenes"
