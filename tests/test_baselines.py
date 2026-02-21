@@ -853,3 +853,253 @@ class TestLiDAROnlyBaseline:
 
         assert 'loss' in metrics
         assert 'reconstruction_loss' in metrics
+
+
+class TestRadarOnlyBaseline:
+    """Test suite for radar-only baseline model."""
+
+    def test_initialization(self):
+        """Test radar-only baseline initializes correctly."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': False
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        assert model.latent_dim == 256
+        assert model.temporal_enabled is False
+        assert model.temporal_pool == 'max'  # default
+
+    def test_initialization_with_temporal(self):
+        """Test initialization with temporal mode."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'mean'
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        assert model.temporal_enabled is True
+        assert model.temporal_pool == 'mean'
+
+    def test_forward_single_frame(self):
+        """Test forward pass with single radar frame."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': False
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        batch = {
+            'radar': torch.randn(4, 1, 128, 128)  # (B, C, H, W)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)  # (B, latent_dim)
+
+    def test_forward_temporal(self):
+        """Test forward pass with temporal sequence."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'max'
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        batch = {
+            'radar': torch.randn(4, 5, 1, 128, 128)  # (B, T, C, H, W)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)  # (B, latent_dim)
+
+    def test_extract_features_single_frame(self):
+        """Test feature extraction from single radar frame."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        radar = torch.randn(4, 1, 128, 128)
+        features = model.extract_features(radar)
+
+        assert features.shape == (4, 256)  # Feature dim = 256
+
+    def test_extract_features_temporal(self):
+        """Test feature extraction from temporal sequence."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        radar = torch.randn(4, 5, 1, 128, 128)  # (B, T, C, H, W)
+        features = model.extract_features(radar)
+
+        assert features.shape == (4, 5, 256)  # (B, T, feature_dim)
+
+    def test_aggregate_temporal_max(self):
+        """Test max pooling temporal aggregation."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'max'
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        features = torch.randn(4, 5, 256)  # (B, T, feature_dim)
+        aggregated = model.aggregate_temporal(features)
+
+        assert aggregated.shape == (4, 256)
+
+    def test_aggregate_temporal_mean(self):
+        """Test mean pooling temporal aggregation."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'mean'
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        features = torch.randn(4, 5, 256)
+        aggregated = model.aggregate_temporal(features)
+
+        assert aggregated.shape == (4, 256)
+
+    def test_compute_loss(self):
+        """Test loss computation."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        batch = {
+            'radar': torch.randn(4, 1, 128, 128)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0
+        assert loss.item() >= 0
+
+        assert 'reconstruction_loss' in metrics
+        assert 'latent_reg' in metrics
+
+    def test_compute_loss_with_future(self):
+        """Test loss computation with future radar frame."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        batch = {
+            'radar': torch.randn(4, 1, 128, 128),
+            'radar_future': torch.randn(4, 1, 128, 128)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert loss.item() >= 0
+
+    def test_different_radar_sizes(self):
+        """Test with different radar tensor sizes."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        # Test different resolutions
+        for size in [64, 128, 256]:
+            batch = {
+                'radar': torch.randn(2, 1, size, size)
+            }
+            output = model.forward(batch)
+            assert output.shape == (2, 256)
+
+    def test_get_latent(self):
+        """Test latent extraction."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+
+        batch = {
+            'radar': torch.randn(4, 1, 128, 128)
+        }
+
+        latent = model.get_latent(batch)
+
+        assert latent.shape == (4, 256)
+
+    def test_train_step(self):
+        """Test training step."""
+        from src.models.baselines.radar_only import RadarOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4
+        }
+
+        model = RadarOnlyBaseline(config)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+        batch = {
+            'radar': torch.randn(4, 1, 128, 128)
+        }
+
+        metrics = model.train_step(batch, optimizer)
+
+        assert 'loss' in metrics
+        assert 'reconstruction_loss' in metrics

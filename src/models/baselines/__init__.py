@@ -3,9 +3,11 @@
 from .base import BaselineModel
 from .camera_only import CameraOnlyBaseline
 from .lidar_only import LiDAROnlyBaseline
+from .radar_only import RadarOnlyBaseline
 
 __all__ = [
     'BaselineModel',
     'CameraOnlyBaseline',
     'LiDAROnlyBaseline',
+    'RadarOnlyBaseline',
 ]
