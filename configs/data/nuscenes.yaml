@@ -32,5 +32,10 @@ cameras: ["CAM_FRONT"]  # Start with front camera only
 lidar_sensors: ["LIDAR_TOP"]
 radar_sensors: ["RADAR_FRONT"]
 
-# Sequence settings (for JEPA temporal modeling)
-sequence_length: 1  # Single frame for now, extend later
+# Temporal sequence settings (for JEPA)
+temporal:
+  enabled: false  # Enable with data.temporal.enabled=true
+  seq_length: 5  # Number of context frames (past)
+  pred_horizon: 3  # Number of future frames to predict
+  frame_skip: 1  # Use every Nth frame (1 = all frames, 2 = half)
+  min_scene_length: 10  # Skip scenes with fewer samples
