@@ -41,7 +41,21 @@ def main(cfg: DictConfig):
     if cfg.data.dataset == 'nuscenes':
         # Use nuScenes dataset
         from src.data.nuscenes_dataset import NuScenesMultiModalDataset
-        train_dataset = NuScenesMultiModalDataset(cfg.data, split='train')
+        base_dataset = NuScenesMultiModalDataset(cfg.data, split='train')
+
+        # Wrap with temporal dataset if enabled
+        if cfg.data.get('temporal', {}).get('enabled', False):
+            from src.data.temporal_dataset import TemporalNuScenesDataset
+            train_dataset = TemporalNuScenesDataset(
+                base_dataset=base_dataset,
+                config=cfg.data.temporal,
+                split='train'
+            )
+            print(f"Using temporal nuScenes: {len(train_dataset)} sequences")
+        else:
+            train_dataset = base_dataset
+            print(f"Using nuScenes dataset: {len(train_dataset)} samples")
+
         # nuScenes dataset already returns properly formatted batches
         dataloader = DataLoader(
             train_dataset,
@@ -49,7 +63,7 @@ def main(cfg: DictConfig):
             shuffle=True,
             num_workers=cfg.data.num_workers
         )
-        print(f"Using nuScenes dataset: {len(train_dataset)} samples")
+
     else:
         # Use dummy dataset (default)
         dataset_config = {
@@ -122,30 +136,68 @@ def main(cfg: DictConfig):
         for i, batch in enumerate(dataloader):
             optimizer.zero_grad()
 
-            # Extract multi-modal inputs and actions from batch
-            camera = batch['camera']
-            lidar = batch['lidar']
-            radar = batch['radar']
-            strategic_action = batch['strategic_action']
-            tactical_action = batch['tactical_action']
+            # Check if temporal batch (has 'context' and 'target')
+            is_temporal = 'context' in batch
 
-            # Generate masks if JEPA masking is enabled
-            masks = None
-            if cfg.training.use_masking and masker is not None:
-                masks = masker.generate_joint_mask(
-                    camera_shape=camera.shape[1:],  # (C, H, W)
-                    lidar_shape=lidar.shape[1:],     # (N, 3)
-                    radar_shape=radar.shape[1:],     # (C, H, W)
-                    batch_size=camera.shape[0]
+            if is_temporal:
+                # Temporal JEPA training
+                context = batch['context']
+                target = batch['target']
+
+                # Extract context data
+                camera = context['camera']
+                lidar = context['lidar']
+                radar = context['radar']
+                strategic_action = context['strategic_action']
+                tactical_action = context['tactical_action']
+
+                # Note: Masking for temporal not yet implemented
+                masks = None
+
+                # Online encoder: predict future from context
+                mu, log_var, _, _, _ = model(
+                    camera, lidar, radar, strategic_action, tactical_action, masks
                 )
 
-            # 1. Feed multi-modal inputs and actions into the HiMACJEPA model (with masks)
-            mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
+                # Target encoder: encode future (no masks)
+                with torch.no_grad():
+                    target_camera = target['camera']
+                    target_lidar = target['lidar']
+                    target_radar = target['radar']
+                    target_strategic = target['strategic_action']
+                    target_tactical = target['tactical_action']
 
-            # Use EMA model to get target latent representation (without masks - full input)
-            with torch.no_grad():
-                ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, strategic_action, tactical_action, None)
-                target_latent = ema_mu.detach()
+                    ema_mu, _, _, _, _ = ema_model(
+                        target_camera, target_lidar, target_radar,
+                        target_strategic, target_tactical, None
+                    )
+                    target_latent = ema_mu.detach()
+
+            else:
+                # Single-frame training (original)
+                camera = batch['camera']
+                lidar = batch['lidar']
+                radar = batch['radar']
+                strategic_action = batch['strategic_action']
+                tactical_action = batch['tactical_action']
+
+                # Generate masks if JEPA masking is enabled
+                masks = None
+                if cfg.training.use_masking and masker is not None:
+                    masks = masker.generate_joint_mask(
+                        camera_shape=camera.shape[1:],  # (C, H, W)
+                        lidar_shape=lidar.shape[1:],     # (N, 3)
+                        radar_shape=radar.shape[1:],     # (C, H, W)
+                        batch_size=camera.shape[0]
+                    )
+
+                # Feed into model (with masks)
+                mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
+
+                # EMA model (without masks)
+                with torch.no_grad():
+                    ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, strategic_action, tactical_action, None)
+                    target_latent = ema_mu.detach()
 
             # 2. Compute predictive loss
             # For now, let's assume target_latent is available in the batch for predictive loss
