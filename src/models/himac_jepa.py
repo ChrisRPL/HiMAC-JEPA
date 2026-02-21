@@ -5,6 +5,7 @@ from .trajectory_planning_head import TrajectoryPlanningHead
 from .motion_prediction_head import MotionPredictionHead
 from .bev_semantic_segmentation_head import BEVSemanticSegmentationHead
 from .action_encoder import HierarchicalActionEncoder
+from .temporal_fusion import TemporalTransformer
 
 class CameraEncoder(nn.Module):
     """Vision Transformer based camera encoder with configurable depth."""
@@ -238,6 +239,19 @@ class HiMACJEPA(nn.Module):
         self.motion_prediction_head = MotionPredictionHead(latent_dim=config["model"]["latent_dim"], output_dim=config["motion_prediction_head"]["output_dim"])
         self.bev_segmentation_head = BEVSemanticSegmentationHead(latent_dim=config["model"]["latent_dim"], bev_h=config["bev_segmentation_head"]["bev_h"], bev_w=config["bev_segmentation_head"]["bev_w"], num_classes=config["bev_segmentation_head"]["num_classes"])
 
+        # Temporal fusion module (optional)
+        use_temporal = config['model'].get('use_temporal_fusion', False)
+        if use_temporal:
+            self.temporal_fusion = TemporalTransformer(
+                d_model=config['model']['latent_dim'],
+                nhead=config['model'].get('temporal_heads', 8),
+                num_layers=config['model'].get('temporal_layers', 4),
+                dropout=config['model'].get('dropout', 0.1)
+            )
+            self.use_temporal = True
+        else:
+            self.use_temporal = False
+
     def apply_lidar_mask(self, lidar, mask):
         """Apply mask to LiDAR point cloud by zeroing out masked points."""
         # lidar: (B, N, 3), mask: (B, N)
@@ -245,21 +259,101 @@ class HiMACJEPA(nn.Module):
         masked_lidar[mask] = 0.0
         return masked_lidar
 
+    def _forward_temporal(self, camera_seq, lidar_seq, radar_seq, strategic_seq, tactical_seq, masks=None):
+        """
+        Forward pass with temporal sequences.
+
+        Args:
+            camera_seq: (B, T, C, H, W)
+            lidar_seq: (B, T, N, 3)
+            radar_seq: (B, T, C, H, W)
+            strategic_seq: (B, T)
+            tactical_seq: (B, T, 3)
+            masks: Optional masks (applied to each frame)
+
+        Returns:
+            Same as forward but processes temporal sequence
+        """
+        B, T = camera_seq.shape[:2]
+
+        # Process each timestep independently
+        cam_features = []
+        lidar_features = []
+        radar_features = []
+
+        for t in range(T):
+            # Encode frame t
+            cam_feat = self.camera_encoder(camera_seq[:, t])  # (B, D)
+            lidar_feat = self.lidar_encoder(lidar_seq[:, t])  # (B, D)
+            radar_feat = self.radar_encoder(radar_seq[:, t])  # (B, D)
+
+            cam_features.append(cam_feat)
+            lidar_features.append(lidar_feat)
+            radar_features.append(radar_feat)
+
+        # Stack temporal features
+        cam_features = torch.stack(cam_features, dim=1)  # (B, T, D)
+        lidar_features = torch.stack(lidar_features, dim=1)  # (B, T, D)
+        radar_features = torch.stack(radar_features, dim=1)  # (B, T, D)
+
+        # Temporal fusion
+        if self.use_temporal:
+            cam_agg = self.temporal_fusion(cam_features, aggregate='last')  # (B, D)
+            lidar_agg = self.temporal_fusion(lidar_features, aggregate='last')  # (B, D)
+            radar_agg = self.temporal_fusion(radar_features, aggregate='last')  # (B, D)
+        else:
+            # Fallback: just use last frame
+            cam_agg = cam_features[:, -1, :]
+            lidar_agg = lidar_features[:, -1, :]
+            radar_agg = radar_features[:, -1, :]
+
+        # Multi-modal fusion
+        z_t = self.fusion(cam_agg, lidar_agg, radar_agg)
+
+        # Encode actions (use last action or average)
+        strategic = strategic_seq[:, -1]  # Use last action
+        tactical = tactical_seq[:, -1, :]
+        action_latent = self.action_encoder(strategic, tactical)
+
+        # Concatenate and predict
+        z_t_action = torch.cat([z_t, action_latent], dim=-1)
+        pred_out = self.predictor(z_t_action.unsqueeze(0)).squeeze(0)
+        dist_params = self.dist_head(pred_out)
+        mu, log_var = torch.chunk(dist_params, 2, dim=-1)
+
+        # Downstream predictions
+        trajectory = self.trajectory_head(mu)
+        motion_predictions = self.motion_prediction_head(mu)
+        bev_segmentation_map = self.bev_segmentation_head(mu)
+
+        return mu, log_var, trajectory, motion_predictions, bev_segmentation_map
+
     def forward(self, camera, lidar, radar, strategic_action, tactical_action, masks=None):
         """Forward pass with action conditioning and optional masking.
 
+        Automatically detects if input is temporal sequence or single frame.
+
         Args:
-            camera: Camera input tensor (B, C, H, W)
-            lidar: LiDAR input tensor (B, N, 3)
-            radar: Radar input tensor (B, C, H, W)
-            strategic_action: Strategic action tensor (B,) or (B, 1)
-            tactical_action: Tactical action tensor (B, tactical_dim)
+            camera: Camera input (B, C, H, W) or (B, T, C, H, W) if temporal
+            lidar: LiDAR input (B, N, 3) or (B, T, N, 3) if temporal
+            radar: Radar input (B, C, H, W) or (B, T, C, H, W) if temporal
+            strategic_action: (B,) or (B, T) if temporal
+            tactical_action: (B, D) or (B, T, D) if temporal
             masks: Optional dict of masks for JEPA training
-                   {'camera': (B, H_p, W_p), 'lidar': (B, N), 'radar': (B, H_p, W_p)}
 
         Returns:
             Tuple of (mu, log_var, trajectory, motion_predictions, bev_segmentation_map)
         """
+        # Check if input is temporal (5D for camera/radar, 4D for lidar)
+        is_temporal = (camera.dim() == 5)  # (B, T, C, H, W)
+
+        if is_temporal:
+            # Route to temporal forward
+            return self._forward_temporal(
+                camera, lidar, radar, strategic_action, tactical_action, masks
+            )
+
+        # Otherwise, proceed with single-frame forward
         # Apply masking if provided (for JEPA training)
         if masks is not None:
             # Apply LiDAR mask (simple zero-out approach)
