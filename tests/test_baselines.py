@@ -1103,3 +1103,214 @@ class TestRadarOnlyBaseline:
 
         assert 'loss' in metrics
         assert 'reconstruction_loss' in metrics
+
+
+class TestIJEPABaseline:
+    """Test suite for I-JEPA baseline model."""
+
+    def test_initialization(self):
+        """Test I-JEPA baseline initializes correctly."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'embed_dim': 384,
+            'depth': 6,  # Smaller for testing
+            'num_heads': 6,
+            'mask_ratio': 0.75
+        }
+
+        model = IJEPABaseline(config)
+
+        assert model.latent_dim == 256
+        assert model.img_size == 224
+        assert model.patch_size == 16
+        assert model.embed_dim == 384
+        assert model.mask_ratio == 0.75
+
+    def test_forward(self):
+        """Test forward pass."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'embed_dim': 192,
+            'depth': 4,
+            'num_heads': 4
+        }
+
+        model = IJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)
+
+    def test_generate_mask(self):
+        """Test mask generation."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'mask_ratio': 0.75
+        }
+
+        model = IJEPABaseline(config)
+
+        context_mask, target_mask = model.generate_mask(4, torch.device('cpu'))
+
+        num_patches = (224 // 16) ** 2
+        assert context_mask.shape == (4, num_patches)
+        assert target_mask.shape == (4, num_patches)
+
+        # Check mask ratio is approximately correct
+        masked_ratio = (~context_mask).float().mean().item()
+        assert 0.7 < masked_ratio < 0.8
+
+    def test_vicreg_loss(self):
+        """Test VICReg loss computation."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'vicreg_lambda': 25.0,
+            'vicreg_mu': 25.0
+        }
+
+        model = IJEPABaseline(config)
+
+        z1 = torch.randn(16, 256)
+        z2 = torch.randn(16, 256)
+
+        loss, metrics = model.vicreg_loss(z1, z2)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0
+        assert 'invariance_loss' in metrics
+        assert 'variance_loss' in metrics
+        assert 'covariance_loss' in metrics
+
+    def test_compute_loss(self):
+        """Test I-JEPA loss computation."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'embed_dim': 192,
+            'depth': 4,
+            'num_heads': 4
+        }
+
+        model = IJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0
+        assert loss.item() >= 0
+
+        assert 'loss' in metrics
+        assert 'invariance_loss' in metrics
+
+    def test_update_target_encoder(self):
+        """Test EMA update of target encoder."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'embed_dim': 192,
+            'depth': 2,
+            'num_heads': 4,
+            'ema_decay': 0.99
+        }
+
+        model = IJEPABaseline(config)
+
+        # Get initial target encoder params
+        initial_params = [p.clone() for p in model.target_encoder.parameters()]
+
+        # Update context encoder
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        model.train_step(batch, optimizer)
+
+        # Check target encoder params changed (via EMA)
+        for p_init, p_current in zip(initial_params, model.target_encoder.parameters()):
+            # Should be different after EMA update
+            assert not torch.allclose(p_init, p_current, atol=1e-6)
+
+    def test_get_latent(self):
+        """Test latent extraction."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'embed_dim': 192,
+            'depth': 4,
+            'num_heads': 4
+        }
+
+        model = IJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        latent = model.get_latent(batch)
+
+        assert latent.shape == (4, 256)
+
+    def test_train_step(self):
+        """Test training step with EMA."""
+        from src.models.baselines.ijepa import IJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'img_size': 224,
+            'patch_size': 16,
+            'embed_dim': 192,
+            'depth': 2,
+            'num_heads': 4
+        }
+
+        model = IJEPABaseline(config)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        metrics = model.train_step(batch, optimizer)
+
+        assert 'loss' in metrics
+        assert 'invariance_loss' in metrics
