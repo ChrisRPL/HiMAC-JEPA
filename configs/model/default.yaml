@@ -1,0 +1,33 @@
+name: "himac_jepa"
+latent_dim: 512
+
+camera_encoder:
+  type: "vit"
+  patch_size: 16
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+
+lidar_encoder:
+  type: "pointnet2"
+  out_channels: 512
+
+radar_encoder:
+  type: "cnn"
+  out_channels: 256
+
+fusion:
+  type: "cross_attention"
+  num_heads: 8
+
+predictor:
+  depth: 6
+  num_heads: 8
+
+action_encoder:
+  strategic_vocab_size: 10
+  tactical_dim: 3
+  latent_dim: 128
+  num_heads: 8
+  depth: 2
+  dropout: 0.1
