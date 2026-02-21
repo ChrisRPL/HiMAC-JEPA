@@ -1,0 +1,52 @@
+# I-JEPA Baseline Configuration
+
+model:
+  name: ijepa
+  latent_dim: 256
+  img_size: 224
+  patch_size: 16
+  embed_dim: 384
+  depth: 12
+  num_heads: 6
+  mask_ratio: 0.75
+  ema_decay: 0.996
+  vicreg_lambda: 25.0
+  vicreg_mu: 25.0
+  dropout: 0.0
+
+training:
+  num_epochs: 100
+  batch_size: 32
+  learning_rate: 1e-4
+  weight_decay: 0.05
+  warmup_epochs: 10
+  optimizer: adamw
+  scheduler: cosine
+  grad_clip: 1.0
+
+data:
+  name: nuscenes
+  version: v1.0-mini
+  dataroot: ./data/nuscenes
+  temporal:
+    enabled: false  # I-JEPA uses spatial masking only
+    seq_length: 1
+    pred_horizon: 1
+    sampling_rate: 2.0
+  augmentation:
+    enabled: true
+    random_flip: true
+    color_jitter: true
+
+logging:
+  wandb:
+    enabled: true
+    project: himac-jepa-baselines
+    entity: null
+    tags: [baseline, ijepa, self-supervised]
+  log_interval: 10
+  save_interval: 5
+
+checkpoint:
+  save_dir: ./checkpoints/baselines/ijepa
+  resume: null

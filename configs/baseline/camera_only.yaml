@@ -1,0 +1,49 @@
+# Camera-Only Baseline Configuration
+
+model:
+  name: camera_only
+  latent_dim: 256
+  pretrained: true  # Use ImageNet pretrained ResNet18
+  temporal_enabled: true
+  lstm_hidden_dim: 512
+  lstm_num_layers: 2
+  dropout: 0.1
+  batch_norm: true
+
+training:
+  num_epochs: 100
+  batch_size: 32
+  learning_rate: 1e-4
+  weight_decay: 0.05
+  warmup_epochs: 10
+  optimizer: adamw
+  scheduler: cosine
+  grad_clip: 1.0
+
+data:
+  name: nuscenes
+  version: v1.0-mini  # Use v1.0-trainval for full training
+  dataroot: ./data/nuscenes
+  temporal:
+    enabled: true
+    seq_length: 5
+    pred_horizon: 3
+    sampling_rate: 2.0
+  augmentation:
+    enabled: true
+    random_flip: true
+    color_jitter: true
+    random_crop: false
+
+logging:
+  wandb:
+    enabled: true
+    project: himac-jepa-baselines
+    entity: null
+    tags: [baseline, camera-only, supervised]
+  log_interval: 10
+  save_interval: 5  # Save checkpoint every 5 epochs
+
+checkpoint:
+  save_dir: ./checkpoints/baselines/camera_only
+  resume: null  # Path to checkpoint to resume from
