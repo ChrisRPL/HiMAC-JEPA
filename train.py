@@ -10,46 +10,11 @@ from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
 def update_ema_params(model, ema_model, decay):
+    """Update EMA model parameters."""
     with torch.no_grad():
         for ema_p, model_p in zip(ema_model.parameters(), model.parameters()):
             ema_p.mul_(decay).add_(model_p, alpha=1 - decay)
 
-class Config:
-    # Model parameters
-    latent_dim = 128
-    camera_encoder_params = {}
-    lidar_encoder_params = {}
-    radar_encoder_params = {}
-    fusion_module_params = {}
-    action_encoder_params = {}
-    predictor_params = {}
-
-    # Head parameters (dummy values for now)
-    trajectory_head_output_dim = 2  # Example output dimension
-    motion_prediction_head_output_dim = 4  # Example output dimension
-    bev_segmentation_head_bev_h = 20
-    bev_segmentation_head_bev_w = 20
-    bev_segmentation_head_num_classes = 5  # Example number of classes
-
-    # Dataset parameters
-    data_dir = "./data"
-    batch_size = 4
-    num_workers = 0
-
-    # Training parameters
-    learning_rate = 1e-4
-    num_epochs = 10
-
-    # Loss weights
-    lambda_param = 25.0  # VICReg invariance
-    mu_param = 25.0      # VICReg variance
-    nu_param = 1.0       # VICReg covariance
-    ema_decay = 0.999    # EMA decay rate
-
-    # Masking parameters
-    mask_ratio_spatial = 0.75
-    mask_ratio_temporal = 0.5
-    use_masking = True  # Enable JEPA masking
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
@@ -131,7 +96,7 @@ def main(cfg: DictConfig):
 
             # Generate masks if JEPA masking is enabled
             masks = None
-            if cfg.use_masking and masker is not None:
+            if cfg.training.use_masking and masker is not None:
                 masks = masker.generate_joint_mask(
                     camera_shape=camera.shape[1:],  # (C, H, W)
                     lidar_shape=lidar.shape[1:],     # (N, 3)
@@ -164,7 +129,7 @@ def main(cfg: DictConfig):
             optimizer.step()
 
             # 6. Add EMA target encoder updates
-            update_ema_params(model, ema_model, decay=cfg.ema_decay)
+            update_ema_params(model, ema_model, decay=cfg.training.ema_decay)
 
             running_total_loss += total_loss.item()
             running_predictive_loss += predictive_loss.item()
