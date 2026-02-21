@@ -1,5 +1,36 @@
 dataset: "nuscenes"
-batch_size: 32
+data_root: "${oc.env:NUSCENES_ROOT,/data/nuscenes}"  # Environment variable with fallback
+version: "v1.0-mini"  # Start with mini for testing
+split: "train"
+batch_size: 8  # Smaller for real data
 num_workers: 4
+
+# Data dimensions
 image_size: [224, 224]
 num_points: 1024
+radar_size: [64, 64]
+
+# Preprocessing
+normalize_images: true
+imagenet_mean: [0.485, 0.456, 0.406]
+imagenet_std: [0.229, 0.224, 0.225]
+
+# Augmentation
+augmentation:
+  enabled: true
+  random_crop: true
+  color_jitter: true
+  horizontal_flip: false  # Don't flip autonomous driving scenes
+
+# Action extraction
+strategic_action_classes: 10  # Match action_encoder config
+tactical_action_dim: 3  # [steering, acceleration, velocity]
+action_normalization: true
+
+# Sensor selection
+cameras: ["CAM_FRONT"]  # Start with front camera only
+lidar_sensors: ["LIDAR_TOP"]
+radar_sensors: ["RADAR_FRONT"]
+
+# Sequence settings (for JEPA temporal modeling)
+sequence_length: 1  # Single frame for now, extend later
