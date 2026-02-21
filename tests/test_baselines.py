@@ -1314,3 +1314,199 @@ class TestIJEPABaseline:
 
         assert 'loss' in metrics
         assert 'invariance_loss' in metrics
+
+
+class TestVJEPABaseline:
+    """Test suite for V-JEPA baseline model."""
+
+    def test_initialization_all_modalities(self):
+        """Test V-JEPA initializes with all modalities."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'embed_dim': 128,
+            'camera_enabled': True,
+            'lidar_enabled': True,
+            'radar_enabled': True
+        }
+
+        model = VJEPABaseline(config)
+
+        assert model.latent_dim == 256
+        assert model.embed_dim == 128
+        assert model.num_modalities == 3
+
+    def test_initialization_camera_only(self):
+        """Test V-JEPA with camera only."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'camera_enabled': True,
+            'lidar_enabled': False,
+            'radar_enabled': False
+        }
+
+        model = VJEPABaseline(config)
+
+        assert model.num_modalities == 1
+        assert model.camera_enabled is True
+
+    def test_forward_all_modalities(self):
+        """Test forward pass with all modalities."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'embed_dim': 128,
+            'camera_enabled': True,
+            'lidar_enabled': True,
+            'radar_enabled': True
+        }
+
+        model = VJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224),
+            'lidar': torch.randn(4, 2048, 3),
+            'radar': torch.randn(4, 1, 128, 128)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)
+
+    def test_forward_camera_only(self):
+        """Test forward pass with camera only."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'camera_enabled': True,
+            'lidar_enabled': False,
+            'radar_enabled': False
+        }
+
+        model = VJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)
+
+    def test_fuse_modalities(self):
+        """Test modality fusion."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'embed_dim': 128,
+            'camera_enabled': True,
+            'lidar_enabled': True,
+            'radar_enabled': True
+        }
+
+        model = VJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224),
+            'lidar': torch.randn(4, 2048, 3),
+            'radar': torch.randn(4, 1, 128, 128)
+        }
+
+        fused = model.fuse_modalities(batch, use_target=False)
+
+        # Should be concatenation of 3 modalities
+        assert fused.shape == (4, 3 * 128)  # 3 modalities * embed_dim
+
+    def test_compute_loss_temporal(self):
+        """Test loss computation with temporal data."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'embed_dim': 128,
+            'camera_enabled': True,
+            'lidar_enabled': False,
+            'radar_enabled': False
+        }
+
+        model = VJEPABaseline(config)
+
+        # Temporal batch
+        batch = {
+            'camera': torch.randn(4, 5, 3, 224, 224)  # (B, T, C, H, W)
+        }
+
+        outputs = model.forward({'camera': batch['camera'][:, -1]})
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0
+        assert loss.item() >= 0
+
+        assert 'loss' in metrics
+        assert 'invariance_loss' in metrics
+
+    def test_update_target_encoders(self):
+        """Test EMA update of target encoders."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'embed_dim': 128,
+            'camera_enabled': True,
+            'lidar_enabled': False,
+            'radar_enabled': False,
+            'ema_decay': 0.99
+        }
+
+        model = VJEPABaseline(config)
+
+        # Get initial params
+        initial_params = [p.clone() for p in model.camera_target_encoder.parameters()]
+
+        # Update
+        batch = {
+            'camera': torch.randn(4, 2, 3, 224, 224)
+        }
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        model.train_step(batch, optimizer)
+
+        # Check params changed
+        for p_init, p_current in zip(initial_params, model.camera_target_encoder.parameters()):
+            assert not torch.allclose(p_init, p_current, atol=1e-6)
+
+    def test_get_latent(self):
+        """Test latent extraction."""
+        from src.models.baselines.vjepa import VJEPABaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'camera_enabled': True,
+            'lidar_enabled': True,
+            'radar_enabled': False
+        }
+
+        model = VJEPABaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224),
+            'lidar': torch.randn(4, 2048, 3)
+        }
+
+        latent = model.get_latent(batch)
+
+        assert latent.shape == (4, 256)

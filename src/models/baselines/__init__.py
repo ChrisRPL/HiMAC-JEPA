@@ -5,6 +5,7 @@ from .camera_only import CameraOnlyBaseline
 from .lidar_only import LiDAROnlyBaseline
 from .radar_only import RadarOnlyBaseline
 from .ijepa import IJEPABaseline
+from .vjepa import VJEPABaseline
 
 __all__ = [
     'BaselineModel',
@@ -12,4 +13,5 @@ __all__ = [
     'LiDAROnlyBaseline',
     'RadarOnlyBaseline',
     'IJEPABaseline',
+    'VJEPABaseline',
 ]
