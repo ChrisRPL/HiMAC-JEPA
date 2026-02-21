@@ -6,6 +6,7 @@ from src.models.himac_jepa import HiMACJEPA
 from src.data.dataset import MultiModalDrivingDataset, collate_fn
 from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
+from src.masking.spatio_temporal_masking import SpatioTemporalMasking
 
 # Configuration (will be replaced by Hydra later)
 def update_ema_params(model, ema_model, decay):
