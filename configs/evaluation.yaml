@@ -1,0 +1,49 @@
+# Evaluation configuration for HiMAC-JEPA
+checkpoint_path: "${oc.env:CHECKPOINT_PATH,checkpoints/best_model.pth}"
+
+# Intrinsic evaluation settings
+intrinsic:
+  enabled: true
+  linear_probe_tasks: ["trajectory", "bev_segmentation"]
+  num_probe_epochs: 100
+  probe_learning_rate: 0.001
+  compute_temporal_consistency: true
+  temporal_window: 10  # frames
+
+# Downstream evaluation settings
+downstream:
+  enabled: true
+  trajectory_horizon: 30  # 3 seconds at 10 Hz
+  trajectory_num_modes: 3  # Multi-modal prediction
+  bev_classes: 10
+  bev_resolution: [200, 200]  # pixels
+  motion_prediction_threshold: [0.5, 1.0, 2.0]  # meters
+
+# Metrics to compute
+metrics:
+  intrinsic:
+    - latent_mse
+    - linear_probe_accuracy
+    - embedding_silhouette
+    - temporal_consistency
+  downstream:
+    - trajectory_ade
+    - trajectory_fde
+    - trajectory_min_ade  # Best of K modes
+    - bev_miou
+    - bev_precision
+    - bev_recall
+
+# Weights & Biases settings
+wandb:
+  enabled: false  # Enable with evaluation.wandb.enabled=true
+  project: "himac-jepa"
+  entity: null  # Set to your W&B username
+  tags: ["evaluation", "nuscenes"]
+  log_frequency: 10  # batches
+
+# Visualization settings
+visualization:
+  enabled: true
+  num_samples: 5  # Number of samples to visualize
+  save_dir: "visualizations/"
