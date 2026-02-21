@@ -31,6 +31,73 @@ cd HiMAC-JEPA
 pip install -r requirements.txt
 ```
 
+### Dataset Setup
+
+#### Option 1: Use Dummy Data (Quick Start)
+The project includes a dummy dataset for testing. No additional setup required:
+```bash
+python train.py  # Uses dummy data by default
+```
+
+#### Option 2: nuScenes Dataset (Recommended)
+
+**1. Download nuScenes**
+
+For testing (v1.0-mini, ~4GB):
+```bash
+# Create data directory
+mkdir -p /data/nuscenes
+
+# Download mini split
+wget https://www.nuscenes.org/data/v1.0-mini.tgz
+tar -xzf v1.0-mini.tgz -C /data/nuscenes
+```
+
+For full training (v1.0-trainval, ~350GB):
+```bash
+# Download metadata
+wget https://www.nuscenes.org/data/v1.0-trainval_meta.tgz
+
+# Download all 10 parts
+for i in {01..10}; do
+    wget https://www.nuscenes.org/data/v1.0-trainval_${i}_of_10.tgz
+done
+
+# Extract all
+tar -xzf v1.0-trainval_meta.tgz -C /data/nuscenes
+for i in {01..10}; do
+    tar -xzf v1.0-trainval_${i}_of_10.tgz -C /data/nuscenes
+done
+```
+
+**2. Set Environment Variable**
+```bash
+export NUSCENES_ROOT=/data/nuscenes
+```
+
+Or add to your `.bashrc` / `.zshrc`:
+```bash
+echo 'export NUSCENES_ROOT=/data/nuscenes' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**3. Verify Installation**
+```python
+from nuscenes.nuscenes import NuScenes
+nusc = NuScenes(version='v1.0-mini', dataroot='/data/nuscenes')
+print(f"Loaded {len(nusc.sample)} samples")
+# Expected output: Loaded 404 samples
+```
+
+**4. Train with nuScenes**
+```bash
+# Use mini split for testing
+python train.py data=nuscenes
+
+# Use full trainval split
+python train.py data=nuscenes data.version=v1.0-trainval
+```
+
 ### Training
 
 **Basic training with default configuration:**
@@ -63,14 +130,19 @@ python train.py +experiment=ablation_no_masking
 - [x] Project Structure & Hydra Config System
 - [x] Core Model Architecture (Encoders, Fusion, Predictor)
 - [x] Hierarchical Action Encoder
-- [x] Data Loading Pipeline (Skeleton)
+- [x] Enhanced Encoder Architectures (ViT-12, Hierarchical PointNet, Velocity-aware Radar)
+- [x] Data Loading Pipeline
+- [x] nuScenes Dataset Integration
+- [x] Multi-Modal Preprocessing (Camera, LiDAR, Radar)
+- [x] Action Extraction from Ego Vehicle Data
 - [x] JEPA Self-Supervised Training Loop
 - [x] Spatio-Temporal Masking Strategy
 - [x] EMA Target Encoder
 - [x] VICReg Regularization
 - [x] Downstream Task Heads (Trajectory, Motion, BEV Segmentation)
-- [ ] Real Dataset Integration (nuScenes/Waymo)
+- [ ] Waymo Open Dataset Integration
 - [ ] Evaluation Metrics & Baselines
+- [ ] CARLA Closed-Loop Evaluation
 
 ## License
 This project is licensed under the MIT License.
