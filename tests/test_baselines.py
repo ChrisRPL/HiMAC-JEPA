@@ -295,3 +295,275 @@ class TestBaselineModel:
             batch_cuda = {'features': torch.randn(4, 100).cuda()}
             output_cuda = model_cuda.forward(batch_cuda)
             assert output_cuda.device.type == 'cuda'
+
+
+class TestCameraOnlyBaseline:
+    """Test suite for camera-only baseline model."""
+
+    def test_initialization(self):
+        """Test camera-only baseline initializes correctly."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,  # Don't download pretrained weights in tests
+            'temporal_enabled': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        assert model.latent_dim == 256
+        assert model.pretrained is False
+        assert model.temporal_enabled is False
+        assert model.lstm is None  # No LSTM when temporal disabled
+
+    def test_initialization_with_temporal(self):
+        """Test initialization with temporal mode."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': True,
+            'lstm_hidden_dim': 512,
+            'lstm_num_layers': 2
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        assert model.temporal_enabled is True
+        assert model.lstm is not None
+        assert model.lstm_hidden_dim == 512
+        assert model.lstm_num_layers == 2
+
+    def test_forward_single_frame(self):
+        """Test forward pass with single frame."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)  # (B, C, H, W)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)  # (B, latent_dim)
+
+    def test_forward_temporal(self):
+        """Test forward pass with temporal sequence."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': True,
+            'lstm_hidden_dim': 512
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 5, 3, 224, 224)  # (B, T, C, H, W)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)  # (B, latent_dim)
+
+    def test_extract_features_single_frame(self):
+        """Test feature extraction from single frame."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        images = torch.randn(4, 3, 224, 224)
+        features = model.extract_features(images)
+
+        assert features.shape == (4, 512)  # ResNet18 feature dim = 512
+
+    def test_extract_features_temporal(self):
+        """Test feature extraction from temporal sequence."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        images = torch.randn(4, 5, 3, 224, 224)  # (B, T, C, H, W)
+        features = model.extract_features(images)
+
+        assert features.shape == (4, 5, 512)  # (B, T, feature_dim)
+
+    def test_aggregate_temporal(self):
+        """Test LSTM temporal aggregation."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': True,
+            'lstm_hidden_dim': 512
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        features = torch.randn(4, 5, 512)  # (B, T, feature_dim)
+        aggregated = model.aggregate_temporal(features)
+
+        assert aggregated.shape == (4, 512)  # (B, lstm_hidden_dim)
+
+    def test_compute_loss(self):
+        """Test loss computation."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0
+        assert loss.item() >= 0
+
+        assert 'reconstruction_loss' in metrics
+        assert 'latent_reg' in metrics
+
+    def test_compute_loss_with_future(self):
+        """Test loss computation with future frame."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224),
+            'camera_future': torch.randn(4, 3, 224, 224)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert loss.item() >= 0
+
+    def test_predict_future(self):
+        """Test future frame prediction."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        predictions = model.predict_future(batch, num_steps=3)
+
+        assert predictions.shape == (4, 3, 512)  # (B, num_steps, feature_dim)
+
+    def test_get_latent(self):
+        """Test latent extraction."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        latent = model.get_latent(batch)
+
+        assert latent.shape == (4, 256)
+
+    def test_train_step(self):
+        """Test training step."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False,
+            'temporal_enabled': False
+        }
+
+        model = CameraOnlyBaseline(config)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+        batch = {
+            'camera': torch.randn(4, 3, 224, 224)
+        }
+
+        metrics = model.train_step(batch, optimizer)
+
+        assert 'loss' in metrics
+        assert 'reconstruction_loss' in metrics
+
+    def test_different_image_sizes(self):
+        """Test with different input image sizes."""
+        from src.models.baselines.camera_only import CameraOnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'pretrained': False
+        }
+
+        model = CameraOnlyBaseline(config)
+
+        # Test different resolutions
+        for size in [128, 224, 256]:
+            batch = {
+                'camera': torch.randn(2, 3, size, size)
+            }
+            output = model.forward(batch)
+            assert output.shape == (2, 256)
