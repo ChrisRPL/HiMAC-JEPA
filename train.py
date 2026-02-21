@@ -72,30 +72,12 @@ def main(cfg: DictConfig):
     dataloader = DataLoader(dataset, batch_size=cfg.data.batch_size, shuffle=True, num_workers=cfg.data.num_workers, collate_fn=collate_fn)
 
     # 2. Model Instantiation
+    # Convert Hydra config to dict format expected by model
     model_config = {
-        "model": {
-            "latent_dim": cfg.latent_dim,
-            "camera_encoder_params": cfg.camera_encoder_params,
-            "lidar_encoder_params": cfg.lidar_encoder_params,
-            "radar_encoder_params": cfg.radar_encoder_params,
-            "fusion_module_params": cfg.fusion_module_params,
-            "action_encoder": {
-                "strategic_vocab_size": 10,
-                "tactical_dim": 3,
-                "latent_dim": 128,
-                "num_heads": 8,
-                "depth": 2,
-                "dropout": 0.1
-            },
-            "predictor_params": cfg.predictor_params,
-        },
-        "trajectory_head": {"output_dim": cfg.trajectory_head_output_dim},
-        "motion_prediction_head": {"output_dim": cfg.motion_prediction_head_output_dim},
-        "bev_segmentation_head": {
-            "bev_h": cfg.bev_segmentation_head_bev_h,
-            "bev_w": cfg.bev_segmentation_head_bev_w,
-            "num_classes": cfg.bev_segmentation_head_num_classes,
-        },
+        "model": OmegaConf.to_container(cfg.model, resolve=True),
+        "trajectory_head": OmegaConf.to_container(cfg.trajectory_head, resolve=True),
+        "motion_prediction_head": OmegaConf.to_container(cfg.motion_prediction_head, resolve=True),
+        "bev_segmentation_head": OmegaConf.to_container(cfg.bev_segmentation_head, resolve=True),
     }
     model = HiMACJEPA(model_config)
     ema_model = HiMACJEPA(model_config) # Initialize EMA model
