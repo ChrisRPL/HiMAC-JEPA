@@ -130,9 +130,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class SimpleTem
-
-poralAggregator(nn.Module):
+class SimpleTemporalAggregator(nn.Module):
     """Simple temporal aggregation without transformer (faster baseline)."""
 
     def __init__(self, d_model=768, hidden_dim=None):
