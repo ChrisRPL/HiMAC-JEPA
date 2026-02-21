@@ -1,14 +1,14 @@
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 from src.models.himac_jepa import HiMACJEPA
 from src.data.dataset import MultiModalDrivingDataset, collate_fn
 from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
-
-# Configuration (will be replaced by Hydra later)
 def update_ema_params(model, ema_model, decay):
     with torch.no_grad():
         for ema_p, model_p in zip(ema_model.parameters(), model.parameters()):
