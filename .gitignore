@@ -32,6 +32,7 @@ checkpoints/
 
 # Data
 data/
+!configs/data/
 *.npy
 *.npz
 
