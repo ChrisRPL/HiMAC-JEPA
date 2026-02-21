@@ -1,0 +1,20 @@
+# @package _global_
+
+# Ablation study: No action conditioning
+# Tests the contribution of hierarchical action conditioning by removing it
+
+defaults:
+  - override /model: default
+  - override /data: nuscenes
+
+experiment_name: "ablation_no_actions"
+
+# Disable action conditioning
+model:
+  use_action_conditioning: false
+
+  action_encoder:
+    enabled: false
+
+wandb:
+  tags: ["ablation", "no-actions", "observation-only"]

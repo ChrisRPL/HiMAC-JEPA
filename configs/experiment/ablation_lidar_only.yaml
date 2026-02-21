@@ -1,0 +1,26 @@
+# @package _global_
+
+# Ablation study: LiDAR-only (disable Camera and Radar)
+# Tests the contribution of multi-modal fusion by using only LiDAR input
+
+defaults:
+  - override /model: default
+  - override /data: nuscenes
+
+experiment_name: "ablation_lidar_only"
+
+model:
+  use_camera: false
+  use_lidar: true
+  use_radar: false
+
+  lidar_encoder:
+    type: "pointnet2"
+    out_channels: 512
+    dropout: 0.1
+
+  fusion:
+    type: "identity"
+
+wandb:
+  tags: ["ablation", "lidar-only", "single-modality"]
