@@ -12,6 +12,7 @@ camera_encoder:
 lidar_encoder:
   type: "pointnet2"
   out_channels: 512
+  dropout: 0.1
 
 radar_encoder:
   type: "cnn"
