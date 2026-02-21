@@ -58,18 +58,18 @@ def main(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
 
     # 1. Data Loading
-    # Create a dummy config for the dataset
+    # Create config dict compatible with dataset (using Hydra config)
     dataset_config = {
         'data': {
-            'batch_size': cfg.batch_size,
-            'num_workers': cfg.num_workers,
+            'batch_size': cfg.data.batch_size,
+            'num_workers': cfg.data.num_workers,
             'augmentation': False,
             'num_samples': 10,
-            'lidar_points': 1024
+            'lidar_points': cfg.data.num_points
         }
     }
     dataset = MultiModalDrivingDataset(dataset_config)
-    dataloader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, collate_fn=collate_fn)
+    dataloader = DataLoader(dataset, batch_size=cfg.data.batch_size, shuffle=True, num_workers=cfg.data.num_workers, collate_fn=collate_fn)
 
     # 2. Model Instantiation
     model_config = {
