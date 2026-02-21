@@ -91,10 +91,22 @@ class HiMACJEPA(nn.Module):
         self.lidar_encoder = LiDAREncoder()
         self.radar_encoder = RadarEncoder()
         self.fusion = MultiModalFusion(latent_dim=config['model']['latent_dim'])
-        
-        # Predictor and Distribution Head
-        self.predictor = nn.TransformerEncoderLayer(d_model=config['model']['latent_dim'], nhead=8)
-        self.dist_head = nn.Linear(config["model"]["latent_dim"], config["model"]["latent_dim"] * 2) # mu and log_var
+
+        # Action encoder
+        action_config = config['model'].get('action_encoder', {})
+        self.action_encoder = HierarchicalActionEncoder(
+            strategic_vocab_size=action_config.get('strategic_vocab_size', 10),
+            tactical_dim=action_config.get('tactical_dim', 3),
+            latent_dim=action_config.get('latent_dim', 128),
+            num_heads=action_config.get('num_heads', 8),
+            depth=action_config.get('depth', 2),
+            dropout=action_config.get('dropout', 0.1)
+        )
+
+        # Predictor input dimension: latent_dim + action_latent_dim
+        predictor_input_dim = config['model']['latent_dim'] + action_config.get('latent_dim', 128)
+        self.predictor = nn.TransformerEncoderLayer(d_model=predictor_input_dim, nhead=8)
+        self.dist_head = nn.Linear(predictor_input_dim, config["model"]["latent_dim"] * 2) # mu and log_var
         self.trajectory_head = TrajectoryPlanningHead(latent_dim=config["model"]["latent_dim"], output_dim=config["trajectory_head"]["output_dim"])
         self.motion_prediction_head = MotionPredictionHead(latent_dim=config["model"]["latent_dim"], output_dim=config["motion_prediction_head"]["output_dim"])
         self.bev_segmentation_head = BEVSemanticSegmentationHead(latent_dim=config["model"]["latent_dim"], bev_h=config["bev_segmentation_head"]["bev_h"], bev_w=config["bev_segmentation_head"]["bev_w"], num_classes=config["bev_segmentation_head"]["num_classes"])
