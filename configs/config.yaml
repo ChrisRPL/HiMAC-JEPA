@@ -38,7 +38,14 @@ training:
   epochs: 100
   learning_rate: 1e-4
   weight_decay: 0.05
-  mask_ratio: 0.75
+
+masking:
+  spatial_ratio: 0.75
+  temporal_ratio: 0.5
+  patch_size_camera: [16, 16]
+  patch_size_lidar: [1, 1]
+  patch_size_radar: [1, 1]
+  num_temporal_steps: 5
 
 motion_prediction_head:
   output_dim: 60 # Example: 15 future timesteps * 2 (x,y coords) * 2 agents
