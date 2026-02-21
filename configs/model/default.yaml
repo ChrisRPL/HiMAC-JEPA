@@ -15,8 +15,10 @@ lidar_encoder:
   dropout: 0.1
 
 radar_encoder:
-  type: "cnn"
+  type: "velocity_aware_cnn"
   out_channels: 256
+  input_channels: 1
+  dropout: 0.1
 
 fusion:
   type: "cross_attention"
