@@ -1,0 +1,16 @@
+# @package _global_
+# Quick overfitting test configuration
+
+defaults:
+  - override /training: default
+
+data:
+  batch_size: 2
+  num_workers: 0
+
+training:
+  epochs: 100
+  learning_rate: 1e-3
+  use_masking: false  # Disable masking for quick overfit test
+
+experiment_name: "overfit_test"
