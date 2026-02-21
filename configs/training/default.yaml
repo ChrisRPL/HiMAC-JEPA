@@ -1,3 +1,12 @@
 epochs: 100
 learning_rate: 1e-4
 weight_decay: 0.05
+
+# Loss weights
+lambda_param: 25.0  # VICReg invariance
+mu_param: 25.0      # VICReg variance
+nu_param: 1.0       # VICReg covariance
+ema_decay: 0.999    # EMA decay rate
+
+# Masking
+use_masking: true
