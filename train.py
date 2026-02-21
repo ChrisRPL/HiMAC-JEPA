@@ -51,8 +51,11 @@ class Config:
     mask_ratio_temporal = 0.5
     use_masking = True  # Enable JEPA masking
 
-def main():
-    cfg = Config()
+@hydra.main(version_base=None, config_path="configs", config_name="config")
+def main(cfg: DictConfig):
+    # Print configuration
+    print("Configuration:")
+    print(OmegaConf.to_yaml(cfg))
 
     # 1. Data Loading
     # Create a dummy config for the dataset
