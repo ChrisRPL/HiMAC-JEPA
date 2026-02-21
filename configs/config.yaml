@@ -3,6 +3,7 @@ defaults:
   - data: nuscenes
   - training: default
   - masking: default
+  - evaluation: evaluation
   - _self_
 
 # Downstream task head configurations
@@ -20,3 +21,11 @@ bev_segmentation_head:
 # Experiment metadata
 experiment_name: "himac_jepa_baseline"
 seed: 42
+
+# Weights & Biases logging (optional)
+wandb:
+  enabled: false  # Enable with wandb.enabled=true
+  project: "himac-jepa"
+  entity: null  # Set to your W&B username
+  tags: []
+  log_frequency: 10  # Log every N batches
