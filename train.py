@@ -89,30 +89,33 @@ def main(cfg: DictConfig):
     print(model)
 
     # Instantiate loss functions
-    predictive_loss_fn = KLDivergenceLoss(reduction='mean') # Or NLLLoss
-    vicreg_loss_fn = VICRegLoss(lambda_param=cfg.lambda_param, mu_param=cfg.mu_param, nu_param=cfg.nu_param)
+    predictive_loss_fn = KLDivergenceLoss(reduction='mean')
+    vicreg_loss_fn = VICRegLoss(
+        lambda_param=cfg.training.lambda_param,
+        mu_param=cfg.training.mu_param,
+        nu_param=cfg.training.nu_param
+    )
 
-    # Optimizer (will be used in the next phase)
-    optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
+    # Optimizer
+    optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate)
 
     # Initialize masking module for JEPA training
     masker = None
-    if cfg.use_masking:
+    if cfg.training.use_masking:
         masker = SpatioTemporalMasking(
-            mask_ratio_spatial=cfg.mask_ratio_spatial,
-            mask_ratio_temporal=cfg.mask_ratio_temporal,
-            patch_size_camera=(16, 16),
-            num_temporal_steps=5
+            mask_ratio_spatial=cfg.masking.spatial_ratio,
+            mask_ratio_temporal=cfg.masking.temporal_ratio,
+            patch_size_camera=tuple(cfg.masking.patch_size_camera),
+            num_temporal_steps=cfg.masking.num_temporal_steps
         )
         print("Masking module initialized for JEPA training.")
 
     print("Loss functions instantiated successfully.")
     print("Optimizer instantiated successfully.")
-
     print("EMA model instantiated and initialized.")
 
-    # Training loop placeholder
-    for epoch in range(cfg.num_epochs):
+    # Training loop
+    for epoch in range(cfg.training.epochs):
         running_total_loss = 0.0
         running_predictive_loss = 0.0
         running_vicreg_loss = 0.0
