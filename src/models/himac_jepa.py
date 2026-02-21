@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from .trajectory_planning_head import TrajectoryPlanningHead
 from .motion_prediction_head import MotionPredictionHead
 from .bev_semantic_segmentation_head import BEVSemanticSegmentationHead
+from .action_encoder import HierarchicalActionEncoder
 
 class CameraEncoder(nn.Module):
     """Vision Transformer based camera encoder."""
