@@ -1,0 +1,6 @@
+spatial_ratio: 0.75
+temporal_ratio: 0.5
+patch_size_camera: [16, 16]
+patch_size_lidar: [1, 1]
+patch_size_radar: [1, 1]
+num_temporal_steps: 5
