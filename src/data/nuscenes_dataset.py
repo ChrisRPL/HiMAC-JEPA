@@ -52,6 +52,49 @@ class NuScenesMultiModalDataset(Dataset):
             tactical_dim=config.tactical_action_dim
         )
 
+        # Initialize label extraction (optional)
+        self.use_labels = config.get('labels', {}).get('enabled', False)
+        if self.use_labels:
+            print("Initializing label extractors...")
+            from .labels import TrajectoryLabelExtractor, BEVLabelExtractor, MotionLabelExtractor, LabelCache
+
+            label_config = config.labels
+
+            # Initialize extractors
+            self.traj_extractor = TrajectoryLabelExtractor(
+                self.nusc,
+                pred_horizons=label_config.trajectory.get('pred_horizons', [1.0, 2.0, 3.0])
+            )
+
+            self.bev_extractor = BEVLabelExtractor(
+                self.nusc,
+                bev_size=tuple(label_config.bev.get('size', [200, 200])),
+                bev_range=label_config.bev.get('range', 50.0)
+            )
+
+            self.motion_extractor = MotionLabelExtractor(
+                self.nusc,
+                pred_horizon=label_config.motion.get('pred_horizon', 3.0),
+                max_distance=label_config.motion.get('max_distance', 50.0),
+                min_visibility=label_config.motion.get('min_visibility', 0.5)
+            )
+
+            # Initialize cache
+            cache_config = label_config.get('cache', {})
+            self.label_cache = LabelCache(
+                cache_dir=cache_config.get('cache_dir', './cache/labels')
+            )
+            self.force_recompute = cache_config.get('force_recompute', False)
+
+            print(f"Label extraction enabled for {split} split")
+
+            # Print cache stats
+            cache_stats = self.label_cache.get_cache_stats(split)
+            if cache_stats['num_cached'] > 0:
+                print(f"Found {cache_stats['num_cached']} cached labels ({cache_stats['total_size_mb']:.1f} MB)")
+        else:
+            self.label_cache = None
+
     def _get_samples(self, split: str) -> List[Dict]:
         """
         Get sample tokens for the specified split.
@@ -188,10 +231,76 @@ class NuScenesMultiModalDataset(Dataset):
             'can_bus': {}  # Not available in mini split
         })
 
-        return {
+        result = {
             'camera': camera,
             'lidar': lidar,
             'radar': radar,
             'strategic_action': torch.tensor(strategic_action, dtype=torch.long),
             'tactical_action': torch.from_numpy(tactical_action).float()
         }
+
+        # Add labels if enabled
+        if self.use_labels:
+            sample_token = sample['token']
+            labels = self._get_labels(sample_token)
+            result['labels'] = labels
+
+        return result
+
+    def _get_labels(self, sample_token: str) -> Dict:
+        """
+        Get labels from cache or extract.
+
+        Args:
+            sample_token: Sample token
+
+        Returns:
+            Dictionary with extracted labels
+        """
+        # Check cache first (unless force_recompute is enabled)
+        if not self.force_recompute:
+            cached = self.label_cache.load_labels(sample_token, self.split)
+            if cached is not None:
+                return cached
+
+        # Extract labels
+        try:
+            labels = {}
+
+            # Trajectory labels
+            if self.config.labels.trajectory.get('include_ego', True):
+                labels['trajectory_ego'] = self.traj_extractor.extract_ego_trajectory(sample_token)
+
+            if self.config.labels.trajectory.get('include_agents', True):
+                labels['trajectory_agents'] = self.traj_extractor.extract_agent_trajectories(
+                    sample_token,
+                    max_agents=self.config.labels.trajectory.get('max_agents', 20)
+                )
+
+            # BEV labels
+            labels['bev'] = self.bev_extractor.extract_bev_labels(sample_token)
+
+            # Motion prediction labels
+            labels['motion'] = self.motion_extractor.extract_motion_labels(sample_token)
+
+        except Exception as e:
+            # If extraction fails, return empty labels
+            print(f"Warning: Label extraction failed for {sample_token}: {e}")
+            labels = {
+                'trajectory_ego': {},
+                'trajectory_agents': {},
+                'bev': np.zeros((200, 200), dtype=np.uint8),
+                'motion': {
+                    'agent_ids': [],
+                    'agent_classes': [],
+                    'current_states': np.zeros((0, 4)),
+                    'future_trajectories': np.zeros((0, 0, 2)),
+                    'valid_masks': np.zeros((0, 0), dtype=bool)
+                }
+            }
+
+        # Save to cache
+        if self.label_cache is not None:
+            self.label_cache.save_labels(sample_token, labels, self.split)
+
+        return labels
