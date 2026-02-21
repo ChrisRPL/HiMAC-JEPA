@@ -31,7 +31,7 @@ wheels/
 checkpoints/
 
 # Data
-data/
+/data/  # Only ignore data/ at root level
 !configs/data/
 *.npy
 *.npz
