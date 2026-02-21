@@ -127,7 +127,15 @@ class HiMACJEPA(nn.Module):
     """Full HiMAC-JEPA Model."""
     def __init__(self, config):
         super().__init__()
-        self.camera_encoder = CameraEncoder()
+        # Camera encoder with config
+        cam_config = config['model'].get('camera_encoder', {})
+        self.camera_encoder = CameraEncoder(
+            embed_dim=cam_config.get('embed_dim', 768),
+            patch_size=cam_config.get('patch_size', 16),
+            depth=cam_config.get('depth', 12),
+            num_heads=cam_config.get('num_heads', 12),
+            dropout=cam_config.get('dropout', 0.1)
+        )
         self.lidar_encoder = LiDAREncoder()
         self.radar_encoder = RadarEncoder()
         self.fusion = MultiModalFusion(latent_dim=config['model']['latent_dim'])
