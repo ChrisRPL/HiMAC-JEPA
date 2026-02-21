@@ -141,12 +141,22 @@ def main():
             strategic_action = batch['strategic_action']
             tactical_action = batch['tactical_action']
 
-            # 1. Feed multi-modal inputs and actions into the HiMACJEPA model
-            mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action)
+            # Generate masks if JEPA masking is enabled
+            masks = None
+            if cfg.use_masking and masker is not None:
+                masks = masker.generate_joint_mask(
+                    camera_shape=camera.shape[1:],  # (C, H, W)
+                    lidar_shape=lidar.shape[1:],     # (N, 3)
+                    radar_shape=radar.shape[1:],     # (C, H, W)
+                    batch_size=camera.shape[0]
+                )
 
-            # Use EMA model to get target latent representation
+            # 1. Feed multi-modal inputs and actions into the HiMACJEPA model (with masks)
+            mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
+
+            # Use EMA model to get target latent representation (without masks - full input)
             with torch.no_grad():
-                ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, strategic_action, tactical_action)
+                ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, strategic_action, tactical_action, None)
                 target_latent = ema_mu.detach()
 
             # 2. Compute predictive loss
