@@ -1,60 +1,22 @@
-model:
-  name: "himac_jepa"
-  latent_dim: 512
-  camera_encoder:
-    type: "vit"
-    patch_size: 16
-    embed_dim: 768
-    depth: 12
-    num_heads: 12
-  lidar_encoder:
-    type: "pointnet2"
-    out_channels: 512
-  radar_encoder:
-    type: "cnn"
-    out_channels: 256
-  fusion:
-    type: "cross_attention"
-    num_heads: 8
-  predictor:
-    depth: 6
-    num_heads: 8
-  action_encoder:
-    strategic_vocab_size: 10
-    tactical_dim: 3
-    latent_dim: 128
-    num_heads: 8
-    depth: 2
-    dropout: 0.1
+defaults:
+  - model: default
+  - data: nuscenes
+  - training: default
+  - masking: default
+  - _self_
 
-data:
-  dataset: "nuscenes"
-  batch_size: 32
-  num_workers: 4
-  image_size: [224, 224]
-  num_points: 1024
-
-training:
-  epochs: 100
-  learning_rate: 1e-4
-  weight_decay: 0.05
-
-masking:
-  spatial_ratio: 0.75
-  temporal_ratio: 0.5
-  patch_size_camera: [16, 16]
-  patch_size_lidar: [1, 1]
-  patch_size_radar: [1, 1]
-  num_temporal_steps: 5
-
-motion_prediction_head:
-  output_dim: 60 # Example: 15 future timesteps * 2 (x,y coords) * 2 agents
-
+# Downstream task head configurations
 trajectory_head:
-  output_dim: 30 # Example: 15 future timesteps * 2 (x,y coordinates)
+  output_dim: 30 # 15 future timesteps * 2 (x,y coordinates)
+
 motion_prediction_head:
-  output_dim: 60 # Example: 15 future timesteps * 2 (x,y coords) * 2 agents
+  output_dim: 60 # 15 future timesteps * 2 (x,y coords) * 2 agents
+
 bev_segmentation_head:
   bev_h: 200
   bev_w: 200
-  num_classes: 10 # Example: 10 semantic classes
+  num_classes: 10
+
+# Experiment metadata
+experiment_name: "himac_jepa_baseline"
+seed: 42
