@@ -1,0 +1,5 @@
+dataset: "nuscenes"
+batch_size: 32
+num_workers: 4
+image_size: [224, 224]
+num_points: 1024
