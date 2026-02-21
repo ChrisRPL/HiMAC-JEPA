@@ -567,3 +567,289 @@ class TestCameraOnlyBaseline:
             }
             output = model.forward(batch)
             assert output.shape == (2, 256)
+
+
+class TestLiDAROnlyBaseline:
+    """Test suite for LiDAR-only baseline model."""
+
+    def test_initialization(self):
+        """Test LiDAR-only baseline initializes correctly."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048,
+            'temporal_enabled': False
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        assert model.latent_dim == 256
+        assert model.num_points == 2048
+        assert model.temporal_enabled is False
+        assert model.temporal_pool == 'max'  # default
+
+    def test_initialization_with_temporal(self):
+        """Test initialization with temporal mode."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048,
+            'temporal_enabled': True,
+            'temporal_pool': 'mean'
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        assert model.temporal_enabled is True
+        assert model.temporal_pool == 'mean'
+
+    def test_forward_single_frame(self):
+        """Test forward pass with single point cloud."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048,
+            'temporal_enabled': False
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        batch = {
+            'lidar': torch.randn(4, 2048, 3)  # (B, N, 3)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)  # (B, latent_dim)
+
+    def test_forward_temporal(self):
+        """Test forward pass with temporal sequence."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048,
+            'temporal_enabled': True,
+            'temporal_pool': 'max'
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        batch = {
+            'lidar': torch.randn(4, 5, 2048, 3)  # (B, T, N, 3)
+        }
+
+        output = model.forward(batch)
+
+        assert output.shape == (4, 256)  # (B, latent_dim)
+
+    def test_extract_features_single_frame(self):
+        """Test feature extraction from single point cloud."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        point_cloud = torch.randn(4, 2048, 3)
+        features = model.extract_features(point_cloud)
+
+        assert features.shape == (4, 1024)  # Feature dim = 1024
+
+    def test_extract_features_temporal(self):
+        """Test feature extraction from temporal sequence."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        point_cloud = torch.randn(4, 5, 2048, 3)  # (B, T, N, 3)
+        features = model.extract_features(point_cloud)
+
+        assert features.shape == (4, 5, 1024)  # (B, T, feature_dim)
+
+    def test_aggregate_temporal_max(self):
+        """Test max pooling temporal aggregation."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'max'
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        features = torch.randn(4, 5, 1024)  # (B, T, feature_dim)
+        aggregated = model.aggregate_temporal(features)
+
+        assert aggregated.shape == (4, 1024)
+
+    def test_aggregate_temporal_mean(self):
+        """Test mean pooling temporal aggregation."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'mean'
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        features = torch.randn(4, 5, 1024)
+        aggregated = model.aggregate_temporal(features)
+
+        assert aggregated.shape == (4, 1024)
+
+    def test_aggregate_temporal_last(self):
+        """Test last frame temporal aggregation."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'temporal_enabled': True,
+            'temporal_pool': 'last'
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        features = torch.randn(4, 5, 1024)
+        aggregated = model.aggregate_temporal(features)
+
+        assert aggregated.shape == (4, 1024)
+
+    def test_compute_loss(self):
+        """Test loss computation."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        batch = {
+            'lidar': torch.randn(4, 2048, 3)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert isinstance(loss, torch.Tensor)
+        assert loss.ndim == 0
+        assert loss.item() >= 0
+
+        assert 'reconstruction_loss' in metrics
+        assert 'latent_reg' in metrics
+
+    def test_compute_loss_with_future(self):
+        """Test loss computation with future point cloud."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        batch = {
+            'lidar': torch.randn(4, 2048, 3),
+            'lidar_future': torch.randn(4, 2048, 3)
+        }
+
+        outputs = model.forward(batch)
+        loss, metrics = model.compute_loss(batch, outputs)
+
+        assert loss.item() >= 0
+
+    def test_different_num_points(self):
+        """Test with different numbers of points."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        # Test with more points (should sample)
+        batch_more = {
+            'lidar': torch.randn(2, 4096, 3)
+        }
+        output_more = model.forward(batch_more)
+        assert output_more.shape == (2, 256)
+
+        # Test with fewer points (should pad)
+        batch_fewer = {
+            'lidar': torch.randn(2, 1024, 3)
+        }
+        output_fewer = model.forward(batch_fewer)
+        assert output_fewer.shape == (2, 256)
+
+    def test_get_latent(self):
+        """Test latent extraction."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+
+        batch = {
+            'lidar': torch.randn(4, 2048, 3)
+        }
+
+        latent = model.get_latent(batch)
+
+        assert latent.shape == (4, 256)
+
+    def test_train_step(self):
+        """Test training step."""
+        from src.models.baselines.lidar_only import LiDAROnlyBaseline
+
+        config = {
+            'latent_dim': 256,
+            'learning_rate': 1e-4,
+            'num_points': 2048
+        }
+
+        model = LiDAROnlyBaseline(config)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+        batch = {
+            'lidar': torch.randn(4, 2048, 3)
+        }
+
+        metrics = model.train_step(batch, optimizer)
+
+        assert 'loss' in metrics
+        assert 'reconstruction_loss' in metrics
