@@ -177,7 +177,12 @@ class HiMACJEPA(nn.Module):
             num_heads=cam_config.get('num_heads', 12),
             dropout=cam_config.get('dropout', 0.1)
         )
-        self.lidar_encoder = LiDAREncoder()
+        # LiDAR encoder with config
+        lidar_config = config['model'].get('lidar_encoder', {})
+        self.lidar_encoder = LiDAREncoder(
+            out_channels=lidar_config.get('out_channels', 512),
+            dropout=lidar_config.get('dropout', 0.1)
+        )
         self.radar_encoder = RadarEncoder()
         self.fusion = MultiModalFusion(latent_dim=config['model']['latent_dim'])
 
