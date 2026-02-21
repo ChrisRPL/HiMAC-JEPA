@@ -117,20 +117,19 @@ def main():
         for i, batch in enumerate(dataloader):
             optimizer.zero_grad()
 
-            # Assuming batch contains (camera, lidar, radar, actions, target_latent_representation)
-            # The actual structure of the batch needs to be confirmed from dataset.py and collate_fn
+            # Extract multi-modal inputs and actions from batch
             camera = batch['camera']
             lidar = batch['lidar']
             radar = batch['radar']
-            # Combine strategic and tactical actions for the model input
-            actions = torch.cat((batch['strategic_action'].unsqueeze(1).float(), batch['tactical_action']), dim=1)
+            strategic_action = batch['strategic_action']
+            tactical_action = batch['tactical_action']
 
-            # 1. Feed multi-modal inputs into the HiMACJEPA model
-            mu, log_var, _, _, _ = model(camera, lidar, radar, actions)
+            # 1. Feed multi-modal inputs and actions into the HiMACJEPA model
+            mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action)
 
             # Use EMA model to get target latent representation
             with torch.no_grad():
-                ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, actions)
+                ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, strategic_action, tactical_action)
                 target_latent = ema_mu.detach()
 
             # 2. Compute predictive loss
