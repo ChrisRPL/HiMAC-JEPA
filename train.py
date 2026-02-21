@@ -110,6 +110,17 @@ def main():
     # Optimizer (will be used in the next phase)
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
+    # Initialize masking module for JEPA training
+    masker = None
+    if cfg.use_masking:
+        masker = SpatioTemporalMasking(
+            mask_ratio_spatial=cfg.mask_ratio_spatial,
+            mask_ratio_temporal=cfg.mask_ratio_temporal,
+            patch_size_camera=(16, 16),
+            num_temporal_steps=5
+        )
+        print("Masking module initialized for JEPA training.")
+
     print("Loss functions instantiated successfully.")
     print("Optimizer instantiated successfully.")
 
