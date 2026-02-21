@@ -65,21 +65,62 @@ class CameraEncoder(nn.Module):
         return x
 
 class LiDAREncoder(nn.Module):
-    """PointNet++ based LiDAR encoder."""
-    def __init__(self, out_channels=512):
+    """Enhanced PointNet-style LiDAR encoder with hierarchical feature learning."""
+    def __init__(self, out_channels=512, dropout=0.1):
         super().__init__()
-        self.mlp = nn.Sequential(
+        self.out_channels = out_channels
+
+        # Hierarchical MLP layers with batch norm and dropout
+        self.mlp1 = nn.Sequential(
             nn.Linear(3, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        self.mlp2 = nn.Sequential(
             nn.Linear(64, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Linear(128, out_channels)
+            nn.Dropout(dropout)
+        )
+
+        self.mlp3 = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        # Global feature aggregation
+        self.mlp_global = nn.Sequential(
+            nn.Linear(256, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(512, out_channels)
         )
 
     def forward(self, x):
         # x: [B, N, 3]
-        x = self.mlp(x)
-        x = torch.max(x, dim=1)[0] # Global max pooling
+        B, N, _ = x.shape
+
+        # Apply point-wise MLPs
+        # Reshape for batch norm: [B, N, C] -> [B*N, C]
+        x = x.reshape(B * N, 3)
+        x = self.mlp1(x)  # [B*N, 64]
+        x = self.mlp2(x)  # [B*N, 128]
+        x = self.mlp3(x)  # [B*N, 256]
+
+        # Reshape back: [B*N, 256] -> [B, N, 256]
+        x = x.reshape(B, N, 256)
+
+        # Global max pooling across points
+        x = torch.max(x, dim=1)[0]  # [B, 256]
+
+        # Final global feature extraction
+        x = self.mlp_global(x)  # [B, out_channels]
+
         return x
 
 class RadarEncoder(nn.Module):
