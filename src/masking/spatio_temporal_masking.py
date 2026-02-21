@@ -29,11 +29,19 @@ class SpatioTemporalMasking:
         self.patch_size_radar = patch_size_radar
         self.num_temporal_steps = num_temporal_steps
 
-    def generate_spatial_mask(self, input_shape: tuple, patch_size: tuple) -> torch.Tensor:
+    def generate_spatial_mask(self, input_shape: tuple, patch_size: tuple, batch_size: int = 1) -> torch.Tensor:
         """
         Generates a 2D spatial mask for a given input shape and patch size.
         Input shape is (H, W) or (C, H, W).
-        Output mask is (H_patches, W_patches) boolean tensor.
+        Output mask is (B, H_patches, W_patches) boolean tensor.
+
+        Args:
+            input_shape: Shape of input (H, W) or (C, H, W)
+            patch_size: Size of patches (pH, pW)
+            batch_size: Number of masks to generate (one per batch element)
+
+        Returns:
+            Batch of spatial masks, shape (B, H_patches, W_patches)
         """
         if len(input_shape) == 3:
             _, H, W = input_shape
@@ -47,11 +55,15 @@ class SpatioTemporalMasking:
         total_patches = num_patches_h * num_patches_w
         num_masked_patches = int(total_patches * self.mask_ratio_spatial)
 
-        mask = torch.zeros(total_patches, dtype=torch.bool)
-        mask_indices = random.sample(range(total_patches), num_masked_patches)
-        mask[mask_indices] = True
+        # Generate different mask for each batch element
+        masks = []
+        for _ in range(batch_size):
+            mask = torch.zeros(total_patches, dtype=torch.bool)
+            mask_indices = random.sample(range(total_patches), num_masked_patches)
+            mask[mask_indices] = True
+            masks.append(mask.view(num_patches_h, num_patches_w))
 
-        return mask.view(num_patches_h, num_patches_w)
+        return torch.stack(masks, dim=0)  # (B, H_patches, W_patches)
 
     def generate_temporal_mask(self) -> torch.Tensor:
         """
