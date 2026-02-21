@@ -39,3 +39,38 @@ temporal:
   pred_horizon: 3  # Number of future frames to predict
   frame_skip: 1  # Use every Nth frame (1 = all frames, 2 = half)
   min_scene_length: 10  # Skip scenes with fewer samples
+
+# Ground truth label extraction (for evaluation)
+labels:
+  enabled: false  # Enable with data.labels.enabled=true
+
+  # Trajectory prediction labels
+  trajectory:
+    pred_horizons: [1.0, 2.0, 3.0]  # Prediction horizons in seconds
+    include_ego: true  # Extract ego vehicle trajectory
+    include_agents: true  # Extract agent trajectories
+    max_agents: 20  # Maximum number of agents to track
+
+  # BEV segmentation labels
+  bev:
+    size: [200, 200]  # BEV image size in pixels (height, width)
+    range: 50.0  # BEV range in meters (centered on ego)
+    classes:  # Semantic classes
+      - background
+      - drivable_area
+      - lane_divider
+      - pedestrian_crossing
+      - vehicle
+      - pedestrian
+
+  # Motion prediction labels
+  motion:
+    pred_horizon: 3.0  # Prediction horizon in seconds
+    max_distance: 50.0  # Maximum distance from ego to track (meters)
+    min_visibility: 0.5  # Minimum visibility score (0-4 scale)
+
+  # Label caching
+  cache:
+    enabled: true  # Enable label caching to disk
+    cache_dir: "./cache/labels"  # Cache directory
+    force_recompute: false  # Force recomputation even if cache exists
