@@ -31,13 +31,46 @@ cd HiMAC-JEPA
 pip install -r requirements.txt
 ```
 
+### Training
+
+**Basic training with default configuration:**
+```bash
+python train.py
+```
+
+**Override specific parameters:**
+```bash
+python train.py model.latent_dim=256 training.epochs=50
+```
+
+**Use experiment configs:**
+```bash
+# Quick overfitting test
+python train.py +experiment=overfit
+
+# Ablation study without masking
+python train.py +experiment=ablation_no_masking
+```
+
+**Configuration structure:**
+- `configs/model/` - Model architecture settings
+- `configs/data/` - Dataset configurations
+- `configs/training/` - Training hyperparameters
+- `configs/masking/` - JEPA masking strategy
+- `configs/experiment/` - Pre-configured experiments
+
 ## Implementation Status
-- [x] Project Structure & Config System
-- [x] Core Model Architecture Components (Encoders, Fusion, Predictor)
+- [x] Project Structure & Hydra Config System
+- [x] Core Model Architecture (Encoders, Fusion, Predictor)
+- [x] Hierarchical Action Encoder
 - [x] Data Loading Pipeline (Skeleton)
-- [ ] Self-Supervised Pre-training Loop
-- [ ] Uncertainty Quantification Module
-- [ ] Downstream Task Heads (Planning, Prediction)
+- [x] JEPA Self-Supervised Training Loop
+- [x] Spatio-Temporal Masking Strategy
+- [x] EMA Target Encoder
+- [x] VICReg Regularization
+- [x] Downstream Task Heads (Trajectory, Motion, BEV Segmentation)
+- [ ] Real Dataset Integration (nuScenes/Waymo)
+- [ ] Evaluation Metrics & Baselines
 
 ## License
 This project is licensed under the MIT License.
