@@ -111,20 +111,41 @@ class HiMACJEPA(nn.Module):
         self.motion_prediction_head = MotionPredictionHead(latent_dim=config["model"]["latent_dim"], output_dim=config["motion_prediction_head"]["output_dim"])
         self.bev_segmentation_head = BEVSemanticSegmentationHead(latent_dim=config["model"]["latent_dim"], bev_h=config["bev_segmentation_head"]["bev_h"], bev_w=config["bev_segmentation_head"]["bev_w"], num_classes=config["bev_segmentation_head"]["num_classes"])
 
-    def forward(self, camera, lidar, radar, actions=None):
+    def forward(self, camera, lidar, radar, strategic_action, tactical_action):
+        """Forward pass with action conditioning.
+
+        Args:
+            camera: Camera input tensor
+            lidar: LiDAR input tensor
+            radar: Radar input tensor
+            strategic_action: Strategic action tensor (B,) or (B, 1)
+            tactical_action: Tactical action tensor (B, tactical_dim)
+
+        Returns:
+            Tuple of (mu, log_var, trajectory, motion_predictions, bev_segmentation_map)
+        """
+        # Encode multi-modal sensor inputs
         cam_feat = self.camera_encoder(camera)
         lidar_feat = self.lidar_encoder(lidar)
         radar_feat = self.radar_encoder(radar)
-        
+
+        # Fuse multi-modal features
         z_t = self.fusion(cam_feat, lidar_feat, radar_feat)
-        
-        # Predict future latent distribution
-        # In full implementation, this would be conditioned on actions
-        pred_out = self.predictor(z_t.unsqueeze(0)).squeeze(0)
+
+        # Encode hierarchical actions
+        action_latent = self.action_encoder(strategic_action, tactical_action)
+
+        # Concatenate sensor representation with action representation
+        z_t_action = torch.cat([z_t, action_latent], dim=-1)
+
+        # Predict future latent distribution conditioned on actions
+        pred_out = self.predictor(z_t_action.unsqueeze(0)).squeeze(0)
         dist_params = self.dist_head(pred_out)
         mu, log_var = torch.chunk(dist_params, 2, dim=-1)
-        
+
+        # Downstream task predictions
         trajectory = self.trajectory_head(mu)
         motion_predictions = self.motion_prediction_head(mu)
         bev_segmentation_map = self.bev_segmentation_head(mu)
+
         return mu, log_var, trajectory, motion_predictions, bev_segmentation_map
