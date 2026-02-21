@@ -124,3 +124,50 @@ class SpatioTemporalMasking:
         Returns the indices of the unmasked patches/steps.
         """
         return torch.nonzero(~mask.flatten(), as_tuple=True)[0]
+
+    def generate_joint_mask(self, camera_shape: tuple, lidar_shape: tuple, radar_shape: tuple, batch_size: int) -> dict:
+        """
+        Generate synchronized masks across all modalities for a batch.
+
+        Args:
+            camera_shape: Shape of camera input (C, H, W)
+            lidar_shape: Shape of LiDAR input (N, 3)
+            radar_shape: Shape of radar input (C, H, W)
+            batch_size: Number of samples in batch
+
+        Returns:
+            Dictionary containing masks for each modality:
+            {
+                'camera': (B, H_patches, W_patches),
+                'lidar': (B, num_point_groups),
+                'radar': (B, H_patches, W_patches),
+                'temporal': (B, num_temporal_steps)
+            }
+        """
+        # Generate spatial masks for each modality
+        camera_mask = self.generate_spatial_mask(camera_shape, self.patch_size_camera, batch_size)
+        radar_mask = self.generate_spatial_mask(radar_shape, self.patch_size_radar, batch_size)
+
+        # For LiDAR, treat points as patches (simpler approach)
+        # In a full implementation, this could use voxelization or clustering
+        num_points = lidar_shape[0] if len(lidar_shape) > 1 else lidar_shape[0]
+        num_masked_points = int(num_points * self.mask_ratio_spatial)
+        lidar_masks = []
+        for _ in range(batch_size):
+            lidar_mask = torch.zeros(num_points, dtype=torch.bool)
+            mask_indices = random.sample(range(num_points), num_masked_points)
+            lidar_mask[mask_indices] = True
+            lidar_masks.append(lidar_mask)
+        lidar_mask = torch.stack(lidar_masks, dim=0)  # (B, N)
+
+        # Generate temporal mask (same for all samples in batch for simplicity)
+        # Could be different per sample if needed
+        temporal_mask = self.generate_temporal_mask()
+        temporal_mask = temporal_mask.unsqueeze(0).expand(batch_size, -1)  # (B, T)
+
+        return {
+            'camera': camera_mask,
+            'lidar': lidar_mask,
+            'radar': radar_mask,
+            'temporal': temporal_mask
+        }
