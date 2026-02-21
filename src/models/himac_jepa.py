@@ -111,19 +111,35 @@ class HiMACJEPA(nn.Module):
         self.motion_prediction_head = MotionPredictionHead(latent_dim=config["model"]["latent_dim"], output_dim=config["motion_prediction_head"]["output_dim"])
         self.bev_segmentation_head = BEVSemanticSegmentationHead(latent_dim=config["model"]["latent_dim"], bev_h=config["bev_segmentation_head"]["bev_h"], bev_w=config["bev_segmentation_head"]["bev_w"], num_classes=config["bev_segmentation_head"]["num_classes"])
 
-    def forward(self, camera, lidar, radar, strategic_action, tactical_action):
-        """Forward pass with action conditioning.
+    def apply_lidar_mask(self, lidar, mask):
+        """Apply mask to LiDAR point cloud by zeroing out masked points."""
+        # lidar: (B, N, 3), mask: (B, N)
+        masked_lidar = lidar.clone()
+        masked_lidar[mask] = 0.0
+        return masked_lidar
+
+    def forward(self, camera, lidar, radar, strategic_action, tactical_action, masks=None):
+        """Forward pass with action conditioning and optional masking.
 
         Args:
-            camera: Camera input tensor
-            lidar: LiDAR input tensor
-            radar: Radar input tensor
+            camera: Camera input tensor (B, C, H, W)
+            lidar: LiDAR input tensor (B, N, 3)
+            radar: Radar input tensor (B, C, H, W)
             strategic_action: Strategic action tensor (B,) or (B, 1)
             tactical_action: Tactical action tensor (B, tactical_dim)
+            masks: Optional dict of masks for JEPA training
+                   {'camera': (B, H_p, W_p), 'lidar': (B, N), 'radar': (B, H_p, W_p)}
 
         Returns:
             Tuple of (mu, log_var, trajectory, motion_predictions, bev_segmentation_map)
         """
+        # Apply masking if provided (for JEPA training)
+        if masks is not None:
+            # Apply LiDAR mask (simple zero-out approach)
+            lidar = self.apply_lidar_mask(lidar, masks['lidar'])
+            # Note: Camera and Radar masking would require more complex logic
+            # For now, we process full inputs and apply masking at latent level
+
         # Encode multi-modal sensor inputs
         cam_feat = self.camera_encoder(camera)
         lidar_feat = self.lidar_encoder(lidar)
