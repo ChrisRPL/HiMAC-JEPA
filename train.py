@@ -70,7 +70,14 @@ def main():
             "lidar_encoder_params": cfg.lidar_encoder_params,
             "radar_encoder_params": cfg.radar_encoder_params,
             "fusion_module_params": cfg.fusion_module_params,
-            "action_encoder_params": cfg.action_encoder_params,
+            "action_encoder": {
+                "strategic_vocab_size": 10,
+                "tactical_dim": 3,
+                "latent_dim": 128,
+                "num_heads": 8,
+                "depth": 2,
+                "dropout": 0.1
+            },
             "predictor_params": cfg.predictor_params,
         },
         "trajectory_head": {"output_dim": cfg.trajectory_head_output_dim},
