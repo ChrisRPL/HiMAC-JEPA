@@ -125,6 +125,70 @@ python train.py +experiment=ablation_no_masking
 - `configs/training/` - Training hyperparameters
 - `configs/masking/` - JEPA masking strategy
 - `configs/experiment/` - Pre-configured experiments
+- `configs/evaluation.yaml` - Evaluation metrics configuration
+
+### Evaluation
+
+**Run evaluation on a trained model:**
+```bash
+# Evaluate with default settings
+python scripts/evaluate.py evaluation.checkpoint_path=checkpoints/best_model.pth
+
+# Evaluate with specific experiment
+python scripts/evaluate.py +experiment=overfit evaluation.checkpoint_path=checkpoints/overfit.pth
+
+# Enable W&B logging
+python scripts/evaluate.py evaluation.checkpoint_path=checkpoints/best_model.pth evaluation.wandb.enabled=true
+```
+
+**Evaluation Metrics:**
+
+*Intrinsic Metrics (representation quality):*
+- **Latent MSE**: Mean squared error between online and target encoder
+- **Linear Probe Accuracy**: Classification/regression accuracy with frozen features
+- **Embedding Silhouette**: Cluster quality of learned representations
+- **Temporal Consistency**: Smoothness of latent trajectories over time
+
+*Downstream Metrics (task performance):*
+- **Trajectory ADE/FDE**: Average and final displacement errors for trajectory prediction
+- **BEV Segmentation mIoU**: Mean intersection over union for bird's-eye-view segmentation
+- **Motion Prediction mAP**: Mean average precision at different distance thresholds
+
+### Ablation Studies
+
+Test individual component contributions:
+
+```bash
+# Camera-only baseline
+python train.py +experiment=ablation_camera_only data=nuscenes
+
+# LiDAR-only baseline
+python train.py +experiment=ablation_lidar_only data=nuscenes
+
+# Radar-only baseline
+python train.py +experiment=ablation_radar_only data=nuscenes
+
+# No action conditioning
+python train.py +experiment=ablation_no_actions data=nuscenes
+
+# No masking (supervised learning)
+python train.py +experiment=ablation_no_masking data=nuscenes
+```
+
+### Weights & Biases Integration
+
+Track experiments with W&B:
+
+```bash
+# Enable W&B logging during training
+python train.py wandb.enabled=true wandb.entity=YOUR_USERNAME
+
+# Custom experiment name and tags
+python train.py wandb.enabled=true experiment_name=my-experiment wandb.tags='[baseline,nuscenes]'
+
+# Combine with nuScenes dataset
+python train.py data=nuscenes wandb.enabled=true
+```
 
 ## Implementation Status
 - [x] Project Structure & Hydra Config System
@@ -140,9 +204,12 @@ python train.py +experiment=ablation_no_masking
 - [x] EMA Target Encoder
 - [x] VICReg Regularization
 - [x] Downstream Task Heads (Trajectory, Motion, BEV Segmentation)
+- [x] Evaluation Metrics (Intrinsic & Downstream)
+- [x] Ablation Study Configurations
+- [x] Weights & Biases Integration
 - [ ] Waymo Open Dataset Integration
-- [ ] Evaluation Metrics & Baselines
 - [ ] CARLA Closed-Loop Evaluation
+- [ ] Multi-GPU Distributed Training
 
 ## License
 This project is licensed under the MIT License.
