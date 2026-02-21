@@ -7,22 +7,62 @@ from .bev_semantic_segmentation_head import BEVSemanticSegmentationHead
 from .action_encoder import HierarchicalActionEncoder
 
 class CameraEncoder(nn.Module):
-    """Vision Transformer based camera encoder."""
-    def __init__(self, embed_dim=768, patch_size=16):
+    """Vision Transformer based camera encoder with configurable depth."""
+    def __init__(self, embed_dim=768, patch_size=16, depth=12, num_heads=12, dropout=0.1):
         super().__init__()
-        # Simplified ViT-like structure for skeleton
+        self.embed_dim = embed_dim
+        self.patch_size = patch_size
+        self.depth = depth
+
+        # Patch embedding
         self.proj = nn.Conv2d(3, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+        # CLS token and positional embeddings
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, 197, embed_dim))
-        self.blocks = nn.Sequential(*[nn.TransformerEncoderLayer(d_model=embed_dim, nhead=12) for _ in range(4)])
+        self.pos_embed = nn.Parameter(torch.zeros(1, 197, embed_dim))  # 196 patches + 1 CLS
+
+        # Transformer blocks with GELU activation and configurable depth
+        self.blocks = nn.Sequential(*[
+            nn.TransformerEncoderLayer(
+                d_model=embed_dim,
+                nhead=num_heads,
+                dim_feedforward=embed_dim * 4,
+                dropout=dropout,
+                activation='gelu',
+                batch_first=False
+            ) for _ in range(depth)
+        ])
+
+        # Layer normalization
+        self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x):
-        x = self.proj(x).flatten(2).transpose(1, 2)
-        cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        # x: [B, 3, H, W]
+        B = x.shape[0]
+
+        # Patch embedding
+        x = self.proj(x)  # [B, embed_dim, H_p, W_p]
+        x = x.flatten(2).transpose(1, 2)  # [B, num_patches, embed_dim]
+
+        # Add CLS token
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # [B, 1, embed_dim]
+        x = torch.cat((cls_tokens, x), dim=1)  # [B, num_patches+1, embed_dim]
+
+        # Add positional embedding
         x = x + self.pos_embed
+
+        # Transformer expects [seq_len, batch, embed_dim]
+        x = x.transpose(0, 1)  # [num_patches+1, B, embed_dim]
+
+        # Apply transformer blocks
         x = self.blocks(x)
-        return x[:, 0] # Return CLS token representation
+
+        # Apply layer norm
+        x = self.norm(x)
+
+        # Return CLS token representation
+        x = x[0]  # [B, embed_dim]
+        return x
 
 class LiDAREncoder(nn.Module):
     """PointNet++ based LiDAR encoder."""
