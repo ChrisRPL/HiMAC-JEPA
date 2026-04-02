@@ -81,6 +81,7 @@ class SpatioTemporalMasking:
         Applies a spatial mask to the input data.
         Assumes data is (C, H, W) or (H, W) and mask is (H_patches, W_patches).
         """
+        was_2d = len(data.shape) == 2
         if len(data.shape) == 3:
             C, H, W = data.shape
         else:
@@ -109,7 +110,7 @@ class SpatioTemporalMasking:
                 reconstructed_data[:, i*pH:(i+1)*pH, j*pW:(j+1)*pW] = masked_patches[:, patch_idx]
                 patch_idx += 1
         
-        if C == 1 and len(data.shape) == 2:
+        if was_2d:
             return reconstructed_data.squeeze(0)
         return reconstructed_data
 
