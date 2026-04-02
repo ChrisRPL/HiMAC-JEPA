@@ -4,18 +4,14 @@ import pytest
 import torch
 import torch.nn as nn
 from typing import Dict, Tuple
+from src.models.baselines.base import BaselineModel
 
 
-class DummyBaseline(nn.Module):
+class DummyBaseline(BaselineModel):
     """Dummy baseline for testing base class functionality."""
 
     def __init__(self, config):
-        super().__init__()
-        from src.models.baselines.base import BaselineModel
-
-        # Inherit from BaselineModel
-        self.__class__.__bases__ = (BaselineModel,)
-        BaselineModel.__init__(self, config)
+        super().__init__(config)
 
         # Simple linear layer for testing
         self.encoder = nn.Linear(100, self.latent_dim)
