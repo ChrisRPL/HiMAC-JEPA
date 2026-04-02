@@ -37,8 +37,8 @@ class TestCameraEncoder:
 
     def test_configurable_embed_dim(self):
         """Test that embed_dim parameter works correctly."""
-        for embed_dim in [256, 512, 768, 1024]:
-            encoder = CameraEncoder(embed_dim=embed_dim)
+        for embed_dim, num_heads in [(256, 8), (512, 8), (768, 12), (1024, 16)]:
+            encoder = CameraEncoder(embed_dim=embed_dim, num_heads=num_heads)
             batch_size = 2
             camera_input = torch.randn(batch_size, 3, 224, 224)
 
