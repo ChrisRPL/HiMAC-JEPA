@@ -14,7 +14,7 @@ def test_generate_spatial_mask_2d():
     patch_size = (16, 16)
     mask = masker.generate_spatial_mask(input_shape, patch_size)
 
-    assert mask.shape == (input_shape[0] // patch_size[0], input_shape[1] // patch_size[1])
+    assert mask.shape == (1, input_shape[0] // patch_size[0], input_shape[1] // patch_size[1])
     total_patches = (input_shape[0] // patch_size[0]) * (input_shape[1] // patch_size[1])
     expected_masked_patches = int(total_patches * 0.5)
     assert torch.sum(mask).item() == expected_masked_patches
@@ -25,7 +25,7 @@ def test_generate_spatial_mask_3d():
     patch_size = (16, 16)
     mask = masker.generate_spatial_mask(input_shape, patch_size)
 
-    assert mask.shape == (input_shape[1] // patch_size[0], input_shape[2] // patch_size[1])
+    assert mask.shape == (1, input_shape[1] // patch_size[0], input_shape[2] // patch_size[1])
     total_patches = (input_shape[1] // patch_size[0]) * (input_shape[2] // patch_size[1])
     expected_masked_patches = int(total_patches * 0.5)
     assert torch.sum(mask).item() == expected_masked_patches
