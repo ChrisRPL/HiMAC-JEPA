@@ -33,7 +33,7 @@ def test_himac_jepa_with_trajectory_head():
     radar_input = torch.randn(1, 1, 64, 64)     # Batch, Channels, Height, Width
 
     # Forward pass
-    mu, log_var, trajectory = model(camera_input, lidar_input, radar_input)
+    mu, log_var, trajectory, _, _ = model(camera_input, lidar_input, radar_input)
 
     expected_latent_dim = config["model"]["latent_dim"]
     assert mu.shape == (1, expected_latent_dim), f"Expected mu shape (1, {expected_latent_dim}), but got {mu.shape}"
