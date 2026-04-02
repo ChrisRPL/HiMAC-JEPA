@@ -1,98 +1,81 @@
 import torch
 import torch.optim as optim
-from src.models.himac_jepa import HiMACJEPA
+import yaml
+
 from src.losses.predictive_loss import KLDivergenceLoss
 from src.losses.vicreg_loss import VICRegLoss
-from train import update_ema_params, Config # Import Config and update_ema_params from train.py
+from src.models.himac_jepa import HiMACJEPA
+
+
+def update_ema_params(model, ema_model, decay):
+    with torch.no_grad():
+        for ema_p, model_p in zip(ema_model.parameters(), model.parameters()):
+            ema_p.mul_(decay).add_(model_p, alpha=1 - decay)
+
+
+def build_model_config():
+    with open("configs/config.yaml", "r") as f:
+        root_config = yaml.safe_load(f)
+    with open("configs/model/default.yaml", "r") as f:
+        model_config = yaml.safe_load(f)
+    with open("configs/training/default.yaml", "r") as f:
+        training_config = yaml.safe_load(f)
+
+    return {
+        "model": model_config,
+        "trajectory_head": root_config["trajectory_head"],
+        "motion_prediction_head": root_config["motion_prediction_head"],
+        "bev_segmentation_head": root_config["bev_segmentation_head"],
+        "training": training_config,
+    }
+
 
 def test_training_step():
-    cfg = Config()
+    cfg = build_model_config()
 
-    # Model instantiation
-    model_config = {
-        "model": {
-            "latent_dim": cfg.latent_dim,
-            "camera_encoder_params": cfg.camera_encoder_params,
-            "lidar_encoder_params": cfg.lidar_encoder_params,
-            "radar_encoder_params": cfg.radar_encoder_params,
-            "fusion_module_params": cfg.fusion_module_params,
-            "action_encoder_params": cfg.action_encoder_params,
-            "predictor_params": cfg.predictor_params,
-        },
-        "trajectory_head": {"output_dim": cfg.trajectory_head_output_dim},
-        "motion_prediction_head": {"output_dim": cfg.motion_prediction_head_output_dim},
-        "bev_segmentation_head": {
-            "bev_h": cfg.bev_segmentation_head_bev_h,
-            "bev_w": cfg.bev_segmentation_head_bev_w,
-            "num_classes": cfg.bev_segmentation_head_num_classes,
-        },
-    }
-    model = HiMACJEPA(model_config)
-    ema_model = HiMACJEPA(model_config)
+    model = HiMACJEPA(cfg)
+    ema_model = HiMACJEPA(cfg)
     ema_model.load_state_dict(model.state_dict())
     for param in ema_model.parameters():
         param.requires_grad = False
 
-    # Loss functions
-    predictive_loss_fn = KLDivergenceLoss(reduction='mean')
-    vicreg_loss_fn = VICRegLoss(lambda_param=cfg.lambda_param, mu_param=cfg.mu_param, nu_param=cfg.nu_param)
+    predictive_loss_fn = KLDivergenceLoss(reduction="mean")
+    vicreg_loss_fn = VICRegLoss(
+        lambda_param=cfg["training"]["lambda_param"],
+        mu_param=cfg["training"]["mu_param"],
+        nu_param=cfg["training"]["nu_param"],
+    )
+    optimizer = optim.Adam(model.parameters(), lr=float(cfg["training"]["learning_rate"]))
 
-    # Optimizer
-    optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
-
-    # Dummy data
-    batch_size = cfg.batch_size
+    batch_size = 4
     camera = torch.randn(batch_size, 3, 224, 224)
     lidar = torch.randn(batch_size, 1024, 3)
     radar = torch.randn(batch_size, 1, 64, 64)
-    strategic_action = torch.randint(0, 3, (batch_size,))
-    tactical_action = torch.randn(batch_size, 3)
-    actions = torch.cat((strategic_action.unsqueeze(1).float(), tactical_action), dim=1)
+    strategic_action = torch.randint(
+        0, cfg["model"]["action_encoder"]["strategic_vocab_size"], (batch_size,)
+    )
+    tactical_action = torch.randn(batch_size, cfg["model"]["action_encoder"]["tactical_dim"])
 
-    # Forward pass
-    mu, log_var, _, _, _ = model(camera, lidar, radar, actions)
+    mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action)
 
-    # Target latent from EMA model
     with torch.no_grad():
-        ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, actions)
+        ema_mu, _, _, _, _ = ema_model(
+            camera, lidar, radar, strategic_action, tactical_action
+        )
         target_latent = ema_mu.detach()
 
-    # Loss calculation
-    predictive_loss = predictive_loss_fn(mu, log_var, target_latent, torch.zeros_like(log_var))
+    predictive_loss = predictive_loss_fn(
+        mu, log_var, target_latent, torch.zeros_like(log_var)
+    )
     vicreg_loss = vicreg_loss_fn(mu, target_latent)
     total_loss = predictive_loss + vicreg_loss
 
-    # Backward pass and optimizer step
     optimizer.zero_grad()
     total_loss.backward()
     optimizer.step()
 
-    # EMA update
-    update_ema_params(model, ema_model, decay=cfg.ema_decay)
+    update_ema_params(model, ema_model, decay=cfg["training"]["ema_decay"])
 
-    # Assertions (basic checks for now)
     assert total_loss.item() > 0, "Total loss should be positive"
     assert not torch.isnan(total_loss).any(), "Total loss should not be NaN"
     assert not torch.isinf(total_loss).any(), "Total loss should not be Inf"
-
-    # Check if model parameters have been updated (simple check)
-    initial_model_params = [p.clone() for p in model.parameters() if p.requires_grad]
-    # Run another step to ensure parameters change
-    mu, log_var, _, _, _ = model(camera, lidar, radar, actions)
-    with torch.no_grad():
-        ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, actions)
-        target_latent = ema_mu.detach()
-    predictive_loss = predictive_loss_fn(mu, log_var, target_latent, torch.zeros_like(log_var))
-    vicreg_loss = vicreg_loss_fn(mu, target_latent)
-    total_loss = predictive_loss + vicreg_loss
-    optimizer.zero_grad()
-    total_loss.backward()
-    optimizer.step()
-    update_ema_params(model, ema_model, decay=cfg.ema_decay)
-    updated_model_params = [p.clone() for p in model.parameters() if p.requires_grad]
-
-    # This assertion might fail if the loss is extremely small or gradients are zero
-    # For a robust test, one might check for a significant change or use a mock optimizer
-    # assert any(not torch.equal(p1, p2) for p1, p2 in zip(initial_model_params, updated_model_params)), "Model parameters should have updated"
-
-    print("Training step test passed successfully!")
