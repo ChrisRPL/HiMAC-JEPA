@@ -188,5 +188,5 @@ class TestMaskingIntegration:
 
         # Check that gradients exist
         assert model.camera_encoder.proj.weight.grad is not None
-        assert model.lidar_encoder.mlp[0].weight.grad is not None
+        assert model.lidar_encoder.mlp1[0].weight.grad is not None
         assert model.action_encoder.strategic_embedding.weight.grad is not None
