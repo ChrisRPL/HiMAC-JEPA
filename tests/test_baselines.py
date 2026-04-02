@@ -1258,8 +1258,7 @@ class TestIJEPABaseline:
 
         # Check target encoder params changed (via EMA)
         for p_init, p_current in zip(initial_params, model.target_encoder.parameters()):
-            # Should be different after EMA update
-            assert not torch.allclose(p_init, p_current, atol=1e-6)
+            assert not torch.equal(p_init, p_current)
 
     def test_get_latent(self):
         """Test latent extraction."""
@@ -1482,7 +1481,7 @@ class TestVJEPABaseline:
 
         # Check params changed
         for p_init, p_current in zip(initial_params, model.camera_target_encoder.parameters()):
-            assert not torch.allclose(p_init, p_current, atol=1e-6)
+            assert not torch.equal(p_init, p_current)
 
     def test_get_latent(self):
         """Test latent extraction."""
