@@ -22,20 +22,39 @@ def test_bev_semantic_segmentation_head():
 
 def test_himac_jepa_with_bev_semantic_segmentation_head():
     print("\nRunning test_himac_jepa_with_bev_semantic_segmentation_head...")
-    # Load config
+    # Load the concrete model config plus downstream head settings.
     with open("configs/config.yaml", "r") as f:
-        config = yaml.safe_load(f)
+        root_config = yaml.safe_load(f)
+    with open("configs/model/default.yaml", "r") as f:
+        model_config = yaml.safe_load(f)
+
+    config = {
+        "model": model_config,
+        "trajectory_head": root_config["trajectory_head"],
+        "motion_prediction_head": root_config["motion_prediction_head"],
+        "bev_segmentation_head": root_config["bev_segmentation_head"],
+    }
 
     # Instantiate the model
     model = HiMACJEPA(config)
+    model.eval()
 
     # Create dummy inputs
     camera_input = torch.randn(1, 3, 224, 224)  # Batch, Channels, Height, Width
     lidar_input = torch.randn(1, 1024, 3)       # Batch, Num_points, Coords
     radar_input = torch.randn(1, 1, 64, 64)     # Batch, Channels, Height, Width
+    strategic_action = torch.randint(0, config["model"]["action_encoder"]["strategic_vocab_size"], (1,))
+    tactical_action = torch.randn(1, config["model"]["action_encoder"]["tactical_dim"])
 
     # Forward pass
-    mu, log_var, trajectory, motion_predictions, bev_segmentation_map = model(camera_input, lidar_input, radar_input)
+    with torch.no_grad():
+        mu, log_var, trajectory, motion_predictions, bev_segmentation_map = model(
+            camera_input,
+            lidar_input,
+            radar_input,
+            strategic_action,
+            tactical_action,
+        )
 
     expected_latent_dim = config["model"]["latent_dim"]
     assert mu.shape == (1, expected_latent_dim), f"Expected mu shape (1, {expected_latent_dim}), but got {mu.shape}"
