@@ -168,6 +168,11 @@ class VJEPABaseline(BaselineModel):
         Returns:
             features: (B, embed_dim)
         """
+        if modality in {'camera', 'radar'} and data.ndim == 5:
+            data = data[:, -1]
+        elif modality == 'lidar' and data.ndim == 4:
+            data = data[:, -1]
+
         if modality == 'camera':
             encoder = self.camera_target_encoder if use_target else self.camera_context_encoder
         elif modality == 'lidar':
