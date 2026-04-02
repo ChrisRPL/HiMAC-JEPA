@@ -43,13 +43,13 @@ def test_apply_mask_2d():
     input_data = torch.ones(64, 64)
     patch_size = (16, 16)
     spatial_mask = masker.generate_spatial_mask(input_data.shape, patch_size)
-    masked_data = masker.apply_mask(input_data, spatial_mask, patch_size)
+    masked_data = masker.apply_mask(input_data, spatial_mask[0], patch_size)
 
     assert masked_data.shape == input_data.shape
     # Check if masked patches are zero
-    for i in range(spatial_mask.shape[0]):
-        for j in range(spatial_mask.shape[1]):
-            if spatial_mask[i, j]:
+    for i in range(spatial_mask.shape[1]):
+        for j in range(spatial_mask.shape[2]):
+            if spatial_mask[0, i, j]:
                 assert torch.all(masked_data[i*patch_size[0]:(i+1)*patch_size[0], j*patch_size[1]:(j+1)*patch_size[1]] == 0)
             else:
                 assert torch.all(masked_data[i*patch_size[0]:(i+1)*patch_size[0], j*patch_size[1]:(j+1)*patch_size[1]] == 1)
@@ -59,13 +59,13 @@ def test_apply_mask_3d():
     input_data = torch.ones(3, 64, 64)
     patch_size = (16, 16)
     spatial_mask = masker.generate_spatial_mask(input_data.shape, patch_size)
-    masked_data = masker.apply_mask(input_data, spatial_mask, patch_size)
+    masked_data = masker.apply_mask(input_data, spatial_mask[0], patch_size)
 
     assert masked_data.shape == input_data.shape
     # Check if masked patches are zero
-    for i in range(spatial_mask.shape[0]):
-        for j in range(spatial_mask.shape[1]):
-            if spatial_mask[i, j]:
+    for i in range(spatial_mask.shape[1]):
+        for j in range(spatial_mask.shape[2]):
+            if spatial_mask[0, i, j]:
                 assert torch.all(masked_data[:, i*patch_size[0]:(i+1)*patch_size[0], j*patch_size[1]:(j+1)*patch_size[1]] == 0)
             else:
                 assert torch.all(masked_data[:, i*patch_size[0]:(i+1)*patch_size[0], j*patch_size[1]:(j+1)*patch_size[1]] == 1)
