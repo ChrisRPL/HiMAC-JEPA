@@ -35,7 +35,7 @@ class VICRegLoss(nn.Module):
         z_b = z_b - z_b.mean(dim=0)
 
         # Invariance term (MSE between z_a and z_b)
-        sim_loss = nn.MSELoss(reduction=\'mean\')(z_a, z_b)
+        sim_loss = nn.MSELoss(reduction='mean')(z_a, z_b)
 
         # Variance term
         std_z_a = torch.sqrt(z_a.var(dim=0) + self.eps)
