@@ -18,14 +18,24 @@ def create_mock_tensor(shape, dtype=None):
     mock_t.cpu.return_value = mock_t # Mock .cpu() method
     mock_t.float.return_value = mock_t # Mock .float() method
     mock_t.long.return_value = mock_t # Mock .long() method
+    mock_t.__add__.return_value = mock_t
+    mock_t.__radd__.return_value = mock_t
+    mock_t.__mul__.return_value = mock_t
+    mock_t.__rmul__.return_value = mock_t
     return mock_t
 
+def normalize_shape(args, kwargs):
+    if args:
+        return args if len(args) > 1 else args[0]
+    return kwargs.get("size")
+
 # Configure the global mock_torch functions to return mock tensors with expected attributes
-mock_torch.Tensor = MagicMock()
-mock_torch.randn.side_effect = lambda *args, **kwargs: create_mock_tensor(args[0] if args else kwargs.get("size"), kwargs.get("dtype"))
+mock_torch.Tensor = MagicMock
+mock_torch.randn.side_effect = lambda *args, **kwargs: create_mock_tensor(normalize_shape(args, kwargs), kwargs.get("dtype"))
+mock_torch.randn_like.side_effect = lambda x: create_mock_tensor(x.shape, x.dtype)
 mock_torch.tensor.side_effect = lambda x, dtype=None: create_mock_tensor(np.array(x).shape, dtype)
 mock_torch.stack.side_effect = lambda x: create_mock_tensor((len(x),) + x[0].shape, x[0].dtype)
-mock_torch.zeros.side_effect = lambda *args, **kwargs: create_mock_tensor(args[0] if args else kwargs.get("size"), kwargs.get("dtype"))
+mock_torch.zeros.side_effect = lambda *args, **kwargs: create_mock_tensor(normalize_shape(args, kwargs), kwargs.get("dtype"))
 mock_torch.cat.side_effect = lambda x, dim: create_mock_tensor((x[0].shape[0] + x[1].shape[0], x[0].shape[1]) if dim == 0 else (x[0].shape[0], x[0].shape[1] + x[1].shape[1]), x[0].dtype)
 
 # Mock torch dtypes
@@ -33,7 +43,7 @@ mock_torch.long = MagicMock()
 mock_torch.float32 = MagicMock()
 
 # Mock torch.utils.data.Dataset and DataLoader
-mock_dataset_base = MagicMock()
+mock_dataset_base = object
 mock_dataloader_base = MagicMock()
 
 # Set up mock_torch.utils.data as a MagicMock that contains Dataset and DataLoader
@@ -77,10 +87,11 @@ class TestMultiModalDrivingDataset(unittest.TestCase):
         mock_pil_image.reset_mock()
 
         # Re-assign side_effects for torch mocks as reset_mock might clear them
-        mock_torch.randn.side_effect = lambda *args, **kwargs: create_mock_tensor(args[0] if args else kwargs.get("size"), kwargs.get("dtype"))
+        mock_torch.randn.side_effect = lambda *args, **kwargs: create_mock_tensor(normalize_shape(args, kwargs), kwargs.get("dtype"))
+        mock_torch.randn_like.side_effect = lambda x: create_mock_tensor(x.shape, x.dtype)
         mock_torch.tensor.side_effect = lambda x, dtype=None: create_mock_tensor(np.array(x).shape, dtype)
         mock_torch.stack.side_effect = lambda x: create_mock_tensor((len(x),) + x[0].shape, x[0].dtype)
-        mock_torch.zeros.side_effect = lambda *args, **kwargs: create_mock_tensor(args[0] if args else kwargs.get("size"), kwargs.get("dtype"))
+        mock_torch.zeros.side_effect = lambda *args, **kwargs: create_mock_tensor(normalize_shape(args, kwargs), kwargs.get("dtype"))
         mock_torch.cat.side_effect = lambda x, dim: create_mock_tensor((x[0].shape[0] + x[1].shape[0], x[0].shape[1]) if dim == 0 else (x[0].shape[0], x[0].shape[1] + x[1].shape[1]), x[0].dtype)
 
 
@@ -177,7 +188,7 @@ class TestMultiModalDrivingDataset(unittest.TestCase):
 
     def test_get_dataloader(self):
         dataloader = get_dataloader(self.mock_config, split='train')
-        self.assertIsInstance(dataloader, mock_dataloader_base)
+        self.assertIs(dataloader, mock_dataloader_base.return_value)
         mock_dataloader_base.assert_called_once_with(
             unittest.mock.ANY, # MultiModalDrivingDataset instance
             batch_size=self.mock_config['data']['batch_size'],
@@ -212,7 +223,7 @@ class TestMultiModalDrivingDataset(unittest.TestCase):
             self.assertEqual(batch['lidar'].shape, (self.mock_config['data']['lidar_points'], 3))
             self.assertEqual(batch['radar'].shape, (1, 64, 64))
 
-        self.assertEqual(batch_count, 1)
+        self.assertEqual(batch_count, self.mock_config['data']['batch_size'])
 
 if __name__ == '__main__':
     unittest.main()
