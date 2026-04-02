@@ -92,10 +92,10 @@ class PointNetSetAbstraction(nn.Module):
 
             if points is not None:
                 grouped_points = self._group_points(
-                    points.transpose(1, 2).contiguous(),
+                    points,
                     new_xyz,
                     self.nsample
-                ).transpose(2, 3)
+                )
                 grouped_points = torch.cat([grouped_xyz, grouped_points], dim=-1)
             else:
                 grouped_points = grouped_xyz
