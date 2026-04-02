@@ -4,11 +4,17 @@ import torch
 import numpy as np
 
 
+class _DummyEvalModel:
+    def eval(self):
+        return self
+
+
 class TestIntrinsicMetrics:
     """Test intrinsic evaluation metrics."""
 
     def test_latent_mse_computation(self):
         """Test latent MSE calculation."""
+        pytest.importorskip("sklearn")
         from src.evaluation.intrinsic_metrics import IntrinsicEvaluator
 
         # Create mock model and dataloader
@@ -17,6 +23,7 @@ class TestIntrinsicMetrics:
 
     def test_linear_probe(self):
         """Test linear probing functionality."""
+        pytest.importorskip("sklearn")
         from src.evaluation.intrinsic_metrics import IntrinsicEvaluator
 
         # TODO: Test linear probe with dummy embeddings
@@ -24,6 +31,7 @@ class TestIntrinsicMetrics:
 
     def test_silhouette_score(self):
         """Test embedding silhouette score computation."""
+        pytest.importorskip("sklearn")
         from src.evaluation.intrinsic_metrics import IntrinsicEvaluator
 
         # TODO: Test with known embeddings
@@ -37,7 +45,7 @@ class TestDownstreamMetrics:
         """Test ADE (Average Displacement Error) calculation."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Create dummy trajectories
         pred = torch.randn(2, 10, 2)  # (batch=2, time=10, coords=2)
@@ -52,7 +60,7 @@ class TestDownstreamMetrics:
         """Test FDE (Final Displacement Error) calculation."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Create dummy trajectories
         pred = torch.randn(2, 10, 2)
@@ -67,7 +75,7 @@ class TestDownstreamMetrics:
         """Test FDE with perfect prediction (should be 0)."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Perfect prediction
         pred = torch.randn(2, 10, 2)
@@ -81,7 +89,7 @@ class TestDownstreamMetrics:
         """Test IoU calculation for segmentation."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Create dummy segmentation masks
         pred = np.array([[0, 0, 1], [1, 1, 0], [0, 1, 1]])
@@ -98,7 +106,7 @@ class TestDownstreamMetrics:
         """Test IoU with perfect segmentation match."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Perfect match
         pred = np.array([[0, 1, 1], [1, 0, 0]])
@@ -114,7 +122,7 @@ class TestDownstreamMetrics:
         """Test IoU with no overlap."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # No overlap
         pred = np.array([[0, 0, 0], [0, 0, 0]])
@@ -130,7 +138,7 @@ class TestDownstreamMetrics:
         """Test confusion matrix computation."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Create dummy predictions
         pred = np.array([[0, 1, 1], [1, 0, 1]])
@@ -153,7 +161,7 @@ class TestMetricsEdgeCases:
         """Test metrics with empty predictions."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Empty predictions
         pred = torch.zeros(0, 10, 2)
@@ -170,7 +178,7 @@ class TestMetricsEdgeCases:
         """Test that NaN values are handled correctly."""
         from src.evaluation.downstream_metrics import DownstreamEvaluator
 
-        evaluator = DownstreamEvaluator(None, None, 'cpu')
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
 
         # Predictions with NaN
         pred = torch.tensor([[[1.0, 2.0], [float('nan'), 3.0]]])
