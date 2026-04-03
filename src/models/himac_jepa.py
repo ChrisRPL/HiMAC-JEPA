@@ -311,6 +311,7 @@ class HiMACJEPA(nn.Module):
             temporal_mask = masks['temporal'][:, :T].bool()
 
         last_visible_idx = self._get_last_visible_idx(temporal_mask, T, camera_seq.device)
+        all_masked = temporal_mask.all(dim=1) if temporal_mask is not None else None
 
         fused_features = []
 
@@ -339,12 +340,12 @@ class HiMACJEPA(nn.Module):
             gather_idx = last_visible_idx.view(B, 1, 1)
             z_t = fused_features.gather(1, gather_idx.expand(-1, 1, fused_features.size(-1))).squeeze(1)
 
-        return z_t, last_visible_idx
+        return z_t, last_visible_idx, all_masked
 
     def encode_observations(self, camera, lidar, radar, masks=None):
         """Encode observations without action conditioning."""
         if camera.dim() == 5:
-            z_t, _ = self._encode_temporal_observation(camera, lidar, radar, masks=masks)
+            z_t, _, _ = self._encode_temporal_observation(camera, lidar, radar, masks=masks)
             return z_t
 
         return self._encode_single_observation(camera, lidar, radar, masks=masks)
@@ -365,7 +366,7 @@ class HiMACJEPA(nn.Module):
             Same as forward but processes temporal sequence
         """
         B, _ = camera_seq.shape[:2]
-        z_t, last_visible_idx = self._encode_temporal_observation(
+        z_t, last_visible_idx, all_masked = self._encode_temporal_observation(
             camera_seq, lidar_seq, radar_seq, masks=masks
         )
 
@@ -380,6 +381,8 @@ class HiMACJEPA(nn.Module):
                 last_visible_idx.view(B, 1, 1).expand(-1, 1, tactical_seq.size(-1))
             ).squeeze(1)
         action_latent = self.action_encoder(strategic, tactical)
+        if all_masked is not None:
+            action_latent = action_latent.masked_fill(all_masked.unsqueeze(1), 0.0)
 
         # Concatenate and predict
         z_t_action = torch.cat([z_t, action_latent], dim=-1)

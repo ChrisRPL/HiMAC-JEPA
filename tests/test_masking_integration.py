@@ -84,6 +84,17 @@ class TestMaskingIntegration:
         # Check that unmasked points are unchanged
         assert torch.allclose(masked_lidar[:, 100:], lidar[:, 100:])
 
+    def test_apply_spatial_mask_masks_expected_patch(self, model):
+        """Partial spatial masks should zero only the selected patch."""
+        tensor = torch.arange(16, dtype=torch.float32).view(1, 1, 4, 4)
+        mask = torch.tensor([[[False, True], [False, False]]])
+
+        masked = model.apply_spatial_mask(tensor, mask)
+
+        expected = tensor.clone()
+        expected[:, :, 0:2, 2:4] = 0.0
+        assert torch.equal(masked, expected)
+
     def test_forward_with_masks(self, model):
         """Test forward pass with masking enabled."""
         batch_size = 2
@@ -252,5 +263,33 @@ class TestMaskingIntegration:
         with torch.no_grad():
             mu, _, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
             mu_alt, _, _, _, _ = model(camera_alt, lidar_alt, radar_alt, strategic_alt, tactical_alt, masks)
+
+        assert torch.allclose(mu, mu_alt, atol=1e-5)
+
+    def test_all_masked_temporal_context_ignores_actions(self, model):
+        """If every timestep is masked, temporal actions should not leak into the output."""
+        batch_size = 2
+        seq_len = 3
+
+        camera = torch.randn(batch_size, seq_len, 3, 224, 224)
+        lidar = torch.randn(batch_size, seq_len, 1024, 3)
+        radar = torch.randn(batch_size, seq_len, 1, 64, 64)
+        strategic_action = torch.randint(0, 10, (batch_size, seq_len))
+        tactical_action = torch.randn(batch_size, seq_len, 3)
+
+        masks = {
+            'camera': torch.zeros(batch_size, 14, 14, dtype=torch.bool),
+            'lidar': torch.zeros(batch_size, 1024, dtype=torch.bool),
+            'radar': torch.zeros(batch_size, 64, 64, dtype=torch.bool),
+            'temporal': torch.ones(batch_size, seq_len, dtype=torch.bool)
+        }
+
+        strategic_alt = torch.randint(0, 10, (batch_size, seq_len))
+        tactical_alt = torch.randn(batch_size, seq_len, 3) * 100
+
+        model.eval()
+        with torch.no_grad():
+            mu, _, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
+            mu_alt, _, _, _, _ = model(camera, lidar, radar, strategic_alt, tactical_alt, masks)
 
         assert torch.allclose(mu, mu_alt, atol=1e-5)
