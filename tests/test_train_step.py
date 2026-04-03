@@ -7,13 +7,7 @@ from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
 from src.models.himac_jepa import HiMACJEPA
 from src.training.masking import build_batch_masks
-from src.training.targets import build_target_latent
-
-
-def update_ema_params(model, ema_model, decay):
-    with torch.no_grad():
-        for ema_p, model_p in zip(ema_model.parameters(), model.parameters()):
-            ema_p.mul_(decay).add_(model_p, alpha=1 - decay)
+from src.training.targets import build_ema_teacher, build_target_latent, update_ema_teacher
 
 
 def build_model_config():
@@ -48,10 +42,7 @@ def test_training_step():
     cfg = build_model_config()
 
     model = HiMACJEPA(cfg)
-    ema_model = HiMACJEPA(cfg)
-    ema_model.load_state_dict(model.state_dict())
-    for param in ema_model.parameters():
-        param.requires_grad = False
+    ema_teacher = build_ema_teacher(cfg, student=model)
 
     predictive_loss_fn = KLDivergenceLoss(reduction="mean")
     vicreg_loss_fn = VICRegLoss(
@@ -72,7 +63,7 @@ def test_training_step():
 
     mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action)
 
-    target_latent = build_target_latent(ema_model, camera, lidar, radar)
+    target_latent = build_target_latent(ema_teacher, camera, lidar, radar)
 
     predictive_loss = predictive_loss_fn(
         mu, log_var, target_latent, torch.zeros_like(log_var)
@@ -84,7 +75,7 @@ def test_training_step():
     total_loss.backward()
     optimizer.step()
 
-    update_ema_params(model, ema_model, decay=cfg["training"]["ema_decay"])
+    update_ema_teacher(model, ema_teacher, decay=cfg["training"]["ema_decay"])
 
     assert total_loss.item() > 0, "Total loss should be positive"
     assert not torch.isnan(total_loss).any(), "Total loss should not be NaN"
@@ -95,10 +86,7 @@ def test_temporal_training_step_with_masking():
     cfg = build_temporal_test_config()
 
     model = HiMACJEPA(cfg)
-    ema_model = HiMACJEPA(cfg)
-    ema_model.load_state_dict(model.state_dict())
-    for param in ema_model.parameters():
-        param.requires_grad = False
+    ema_teacher = build_ema_teacher(cfg, student=model)
 
     predictive_loss_fn = KLDivergenceLoss(reduction="mean")
     vicreg_loss_fn = VICRegLoss(
@@ -139,7 +127,7 @@ def test_temporal_training_step_with_masking():
     )
 
     target_latent = build_target_latent(
-        ema_model,
+        ema_teacher,
         target_camera,
         target_lidar,
         target_radar,
@@ -155,7 +143,7 @@ def test_temporal_training_step_with_masking():
     total_loss.backward()
     optimizer.step()
 
-    update_ema_params(model, ema_model, decay=cfg["training"]["ema_decay"])
+    update_ema_teacher(model, ema_teacher, decay=cfg["training"]["ema_decay"])
 
     assert masks["temporal"].shape == (batch_size, context_steps)
     assert total_loss.item() > 0, "Temporal total loss should be positive"

@@ -11,12 +11,7 @@ from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
 from src.training.masking import build_batch_masks
-from src.training.targets import build_target_latent
-def update_ema_params(model, ema_model, decay):
-    """Update EMA model parameters."""
-    with torch.no_grad():
-        for ema_p, model_p in zip(ema_model.parameters(), model.parameters()):
-            ema_p.mul_(decay).add_(model_p, alpha=1 - decay)
+from src.training.targets import build_ema_teacher, build_target_latent, update_ema_teacher
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
@@ -96,10 +91,7 @@ def main(cfg: DictConfig):
         "bev_segmentation_head": OmegaConf.to_container(cfg.bev_segmentation_head, resolve=True),
     }
     model = HiMACJEPA(model_config)
-    ema_model = HiMACJEPA(model_config) # Initialize EMA model
-    ema_model.load_state_dict(model.state_dict()) # Copy initial weights
-    for param in ema_model.parameters():
-        param.requires_grad = False # EMA model is not trained via backprop
+    ema_teacher = build_ema_teacher(model_config, student=model)
 
     print("Model instantiated successfully:")
     print(model)
@@ -128,7 +120,7 @@ def main(cfg: DictConfig):
 
     print("Loss functions instantiated successfully.")
     print("Optimizer instantiated successfully.")
-    print("EMA model instantiated and initialized.")
+    print("EMA teacher instantiated and initialized.")
 
     # Training loop
     for epoch in range(cfg.training.epochs):
@@ -167,7 +159,7 @@ def main(cfg: DictConfig):
                 target_lidar = target['lidar']
                 target_radar = target['radar']
                 target_latent = build_target_latent(
-                    ema_model, target_camera, target_lidar, target_radar
+                    ema_teacher, target_camera, target_lidar, target_radar
                 )
 
             else:
@@ -185,8 +177,8 @@ def main(cfg: DictConfig):
                 # Feed into model (with masks)
                 mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
 
-                # EMA model (without masks)
-                target_latent = build_target_latent(ema_model, camera, lidar, radar)
+                # EMA teacher (without action conditioning)
+                target_latent = build_target_latent(ema_teacher, camera, lidar, radar)
 
             # 2. Compute predictive loss
             # For now, let's assume target_latent is available in the batch for predictive loss
@@ -205,7 +197,7 @@ def main(cfg: DictConfig):
             optimizer.step()
 
             # 6. Add EMA target encoder updates
-            update_ema_params(model, ema_model, decay=cfg.training.ema_decay)
+            update_ema_teacher(model, ema_teacher, decay=cfg.training.ema_decay)
 
             running_total_loss += total_loss.item()
             running_predictive_loss += predictive_loss.item()
