@@ -10,6 +10,7 @@ from src.data.dataset import MultiModalDrivingDataset, collate_fn
 from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
+from src.training.masking import build_batch_masks
 def update_ema_params(model, ema_model, decay):
     """Update EMA model parameters."""
     with torch.no_grad():
@@ -151,8 +152,9 @@ def main(cfg: DictConfig):
                 strategic_action = context['strategic_action']
                 tactical_action = context['tactical_action']
 
-                # Note: Masking for temporal not yet implemented
                 masks = None
+                if cfg.training.use_masking and masker is not None:
+                    masks = build_batch_masks(masker, camera, lidar, radar)
 
                 # Online encoder: predict future from context
                 mu, log_var, _, _, _ = model(
@@ -181,15 +183,9 @@ def main(cfg: DictConfig):
                 strategic_action = batch['strategic_action']
                 tactical_action = batch['tactical_action']
 
-                # Generate masks if JEPA masking is enabled
                 masks = None
                 if cfg.training.use_masking and masker is not None:
-                    masks = masker.generate_joint_mask(
-                        camera_shape=camera.shape[1:],  # (C, H, W)
-                        lidar_shape=lidar.shape[1:],     # (N, 3)
-                        radar_shape=radar.shape[1:],     # (C, H, W)
-                        batch_size=camera.shape[0]
-                    )
+                    masks = build_batch_masks(masker, camera, lidar, radar)
 
                 # Feed into model (with masks)
                 mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
