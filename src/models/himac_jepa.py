@@ -272,6 +272,83 @@ class HiMACJEPA(nn.Module):
 
         return tensor.masked_fill(expanded_mask.unsqueeze(1), 0.0)
 
+    def _get_last_visible_idx(self, temporal_mask, seq_len, device):
+        """Get the last unmasked timestep for each batch element."""
+        if temporal_mask is None:
+            return None
+
+        time_index = torch.arange(seq_len, device=device).unsqueeze(0).expand(temporal_mask.size(0), -1)
+        last_visible_idx = time_index.masked_fill(temporal_mask, -1).max(dim=1).values
+
+        return torch.where(
+            last_visible_idx >= 0,
+            last_visible_idx,
+            torch.full_like(last_visible_idx, seq_len - 1)
+        )
+
+    def _encode_single_observation(self, camera, lidar, radar, masks=None):
+        """Encode one timestep of multi-modal observations into a fused latent."""
+        if masks is not None:
+            if 'camera' in masks:
+                camera = self.apply_spatial_mask(camera, masks['camera'])
+            if 'lidar' in masks:
+                lidar = self.apply_lidar_mask(lidar, masks['lidar'])
+            if 'radar' in masks:
+                radar = self.apply_spatial_mask(radar, masks['radar'])
+
+        cam_feat = self.camera_encoder(camera)
+        lidar_feat = self.lidar_encoder(lidar)
+        radar_feat = self.radar_encoder(radar)
+
+        return self.fusion(cam_feat, lidar_feat, radar_feat)
+
+    def _encode_temporal_observation(self, camera_seq, lidar_seq, radar_seq, masks=None):
+        """Encode a temporal observation sequence into a fused latent."""
+        B, T = camera_seq.shape[:2]
+        temporal_mask = None
+
+        if masks is not None and 'temporal' in masks:
+            temporal_mask = masks['temporal'][:, :T].bool()
+
+        last_visible_idx = self._get_last_visible_idx(temporal_mask, T, camera_seq.device)
+
+        fused_features = []
+
+        for t in range(T):
+            camera_frame = camera_seq[:, t]
+            lidar_frame = lidar_seq[:, t]
+            radar_frame = radar_seq[:, t]
+
+            if temporal_mask is not None and t < temporal_mask.size(1):
+                frame_mask = temporal_mask[:, t]
+                camera_frame = camera_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
+                lidar_frame = lidar_frame.masked_fill(frame_mask.view(B, 1, 1), 0.0)
+                radar_frame = radar_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
+
+            fused_features.append(
+                self._encode_single_observation(camera_frame, lidar_frame, radar_frame, masks=masks)
+            )
+
+        fused_features = torch.stack(fused_features, dim=1)
+
+        if self.use_temporal:
+            z_t = self.temporal_fusion(fused_features, aggregate='last')
+        elif last_visible_idx is None:
+            z_t = fused_features[:, -1, :]
+        else:
+            gather_idx = last_visible_idx.view(B, 1, 1)
+            z_t = fused_features.gather(1, gather_idx.expand(-1, 1, fused_features.size(-1))).squeeze(1)
+
+        return z_t, last_visible_idx
+
+    def encode_observations(self, camera, lidar, radar, masks=None):
+        """Encode observations without action conditioning."""
+        if camera.dim() == 5:
+            z_t, _ = self._encode_temporal_observation(camera, lidar, radar, masks=masks)
+            return z_t
+
+        return self._encode_single_observation(camera, lidar, radar, masks=masks)
+
     def _forward_temporal(self, camera_seq, lidar_seq, radar_seq, strategic_seq, tactical_seq, masks=None):
         """
         Forward pass with temporal sequences.
@@ -287,75 +364,10 @@ class HiMACJEPA(nn.Module):
         Returns:
             Same as forward but processes temporal sequence
         """
-        B, T = camera_seq.shape[:2]
-        temporal_mask = None
-        last_visible_idx = None
-
-        if masks is not None and 'temporal' in masks:
-            temporal_mask = masks['temporal'][:, :T].bool()
-            time_index = torch.arange(T, device=camera_seq.device).unsqueeze(0).expand(B, -1)
-            last_visible_idx = time_index.masked_fill(temporal_mask, -1).max(dim=1).values
-            last_visible_idx = torch.where(
-                last_visible_idx >= 0,
-                last_visible_idx,
-                torch.full_like(last_visible_idx, T - 1)
-            )
-
-        # Process each timestep independently
-        cam_features = []
-        lidar_features = []
-        radar_features = []
-
-        for t in range(T):
-            camera_frame = camera_seq[:, t]
-            lidar_frame = lidar_seq[:, t]
-            radar_frame = radar_seq[:, t]
-
-            if temporal_mask is not None and t < temporal_mask.size(1):
-                frame_mask = temporal_mask[:, t]
-                camera_frame = camera_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
-                lidar_frame = lidar_frame.masked_fill(frame_mask.view(B, 1, 1), 0.0)
-                radar_frame = radar_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
-
-            if masks is not None and 'camera' in masks:
-                camera_frame = self.apply_spatial_mask(camera_frame, masks['camera'])
-            if masks is not None and 'lidar' in masks:
-                lidar_frame = self.apply_lidar_mask(lidar_frame, masks['lidar'])
-            if masks is not None and 'radar' in masks:
-                radar_frame = self.apply_spatial_mask(radar_frame, masks['radar'])
-
-            # Encode frame t
-            cam_feat = self.camera_encoder(camera_frame)  # (B, D)
-            lidar_feat = self.lidar_encoder(lidar_frame)  # (B, D)
-            radar_feat = self.radar_encoder(radar_frame)  # (B, D)
-
-            cam_features.append(cam_feat)
-            lidar_features.append(lidar_feat)
-            radar_features.append(radar_feat)
-
-        # Stack temporal features
-        cam_features = torch.stack(cam_features, dim=1)  # (B, T, D)
-        lidar_features = torch.stack(lidar_features, dim=1)  # (B, T, D)
-        radar_features = torch.stack(radar_features, dim=1)  # (B, T, D)
-
-        # Temporal fusion
-        if self.use_temporal:
-            cam_agg = self.temporal_fusion(cam_features, aggregate='last')  # (B, D)
-            lidar_agg = self.temporal_fusion(lidar_features, aggregate='last')  # (B, D)
-            radar_agg = self.temporal_fusion(radar_features, aggregate='last')  # (B, D)
-        else:
-            if last_visible_idx is None:
-                cam_agg = cam_features[:, -1, :]
-                lidar_agg = lidar_features[:, -1, :]
-                radar_agg = radar_features[:, -1, :]
-            else:
-                gather_idx = last_visible_idx.view(B, 1, 1)
-                cam_agg = cam_features.gather(1, gather_idx.expand(-1, 1, cam_features.size(-1))).squeeze(1)
-                lidar_agg = lidar_features.gather(1, gather_idx.expand(-1, 1, lidar_features.size(-1))).squeeze(1)
-                radar_agg = radar_features.gather(1, gather_idx.expand(-1, 1, radar_features.size(-1))).squeeze(1)
-
-        # Multi-modal fusion
-        z_t = self.fusion(cam_agg, lidar_agg, radar_agg)
+        B, _ = camera_seq.shape[:2]
+        z_t, last_visible_idx = self._encode_temporal_observation(
+            camera_seq, lidar_seq, radar_seq, masks=masks
+        )
 
         # Encode actions (use last action or average)
         if last_visible_idx is None:
@@ -409,22 +421,7 @@ class HiMACJEPA(nn.Module):
 
         # Otherwise, proceed with single-frame forward
         # Apply masking if provided (for JEPA training)
-        if masks is not None:
-            if 'camera' in masks:
-                camera = self.apply_spatial_mask(camera, masks['camera'])
-            # Apply LiDAR mask (simple zero-out approach)
-            if 'lidar' in masks:
-                lidar = self.apply_lidar_mask(lidar, masks['lidar'])
-            if 'radar' in masks:
-                radar = self.apply_spatial_mask(radar, masks['radar'])
-
-        # Encode multi-modal sensor inputs
-        cam_feat = self.camera_encoder(camera)
-        lidar_feat = self.lidar_encoder(lidar)
-        radar_feat = self.radar_encoder(radar)
-
-        # Fuse multi-modal features
-        z_t = self.fusion(cam_feat, lidar_feat, radar_feat)
+        z_t = self.encode_observations(camera, lidar, radar, masks=masks)
 
         # Encode hierarchical actions
         action_latent = self.action_encoder(strategic_action, tactical_action)
