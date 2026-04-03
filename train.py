@@ -11,6 +11,7 @@ from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
 from src.training.masking import build_batch_masks
+from src.training.targets import build_target_latent
 def update_ema_params(model, ema_model, decay):
     """Update EMA model parameters."""
     with torch.no_grad():
@@ -162,18 +163,12 @@ def main(cfg: DictConfig):
                 )
 
                 # Target encoder: encode future (no masks)
-                with torch.no_grad():
-                    target_camera = target['camera']
-                    target_lidar = target['lidar']
-                    target_radar = target['radar']
-                    target_strategic = target['strategic_action']
-                    target_tactical = target['tactical_action']
-
-                    ema_mu, _, _, _, _ = ema_model(
-                        target_camera, target_lidar, target_radar,
-                        target_strategic, target_tactical, None
-                    )
-                    target_latent = ema_mu.detach()
+                target_camera = target['camera']
+                target_lidar = target['lidar']
+                target_radar = target['radar']
+                target_latent = build_target_latent(
+                    ema_model, target_camera, target_lidar, target_radar
+                )
 
             else:
                 # Single-frame training (original)
@@ -191,9 +186,7 @@ def main(cfg: DictConfig):
                 mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
 
                 # EMA model (without masks)
-                with torch.no_grad():
-                    ema_mu, _, _, _, _ = ema_model(camera, lidar, radar, strategic_action, tactical_action, None)
-                    target_latent = ema_mu.detach()
+                target_latent = build_target_latent(ema_model, camera, lidar, radar)
 
             # 2. Compute predictive loss
             # For now, let's assume target_latent is available in the batch for predictive loss
