@@ -325,7 +325,7 @@ class TestSimpleTemporalAggregator:
         x = torch.randn(4, 5, 256, requires_grad=True)
         out = model(x, aggregate='last')
 
-        loss = out.sum()
+        loss = out.pow(2).mean()
         loss.backward()
 
         assert x.grad is not None
