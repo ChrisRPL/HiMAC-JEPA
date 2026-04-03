@@ -1,7 +1,11 @@
 import torch
 import yaml
+from pathlib import Path
 from src.models.himac_jepa import HiMACJEPA
 from src.models.bev_semantic_segmentation_head import BEVSemanticSegmentationHead
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_bev_semantic_segmentation_head():
     print("\nRunning test_bev_semantic_segmentation_head...")
@@ -23,9 +27,9 @@ def test_bev_semantic_segmentation_head():
 def test_himac_jepa_with_bev_semantic_segmentation_head():
     print("\nRunning test_himac_jepa_with_bev_semantic_segmentation_head...")
     # Load the concrete model config plus downstream head settings.
-    with open("configs/config.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "config.yaml").open("r") as f:
         root_config = yaml.safe_load(f)
-    with open("configs/model/default.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "model" / "default.yaml").open("r") as f:
         model_config = yaml.safe_load(f)
 
     config = {

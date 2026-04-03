@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import os
 import sys
 import numpy as np
+from pathlib import Path
 
 # --- Mock torch and PIL.Image before importing the dataset module ---
 # This ensures that the dataset module imports the mocked versions.
@@ -62,9 +63,10 @@ with patch.dict("sys.modules", {
     "torch.utils.data": mock_torch.utils.data,
     "PIL.Image": mock_pil_image
 }):
-    # Add src to path for module import *inside* the patch.dict context
-    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
-    from data.dataset import MultiModalDrivingDataset, collate_fn, get_dataloader
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from src.data.dataset import MultiModalDrivingDataset, collate_fn, get_dataloader
 
 class TestMultiModalDrivingDataset(unittest.TestCase):
 
@@ -97,8 +99,9 @@ class TestMultiModalDrivingDataset(unittest.TestCase):
 
     def tearDown(self):
         # Clean up dummy dataset root if created
-        if os.path.exists(self.dataset_root):
-            os.rmdir(self.dataset_root)
+        dataset_root = Path(self.dataset_root)
+        if dataset_root.exists():
+            dataset_root.rmdir()
 
     def test_dataset_initialization(self):
         dataset = MultiModalDrivingDataset(self.mock_config, dataset_root=self.dataset_root)
@@ -199,16 +202,15 @@ class TestMultiModalDrivingDataset(unittest.TestCase):
 
         # Simulate iterating through dataloader
         mock_dataloader_instance = mock_dataloader_base.return_value
-        mock_dataloader_instance.__iter__.return_value = [
-            {
-                'camera': mock_torch.randn(3, 224, 224),
-                'lidar': mock_torch.randn(self.mock_config['data']['lidar_points'], 3),
-                'radar': mock_torch.randn(1, 64, 64),
-                'strategic_action': mock_torch.tensor(0, dtype=mock_torch.long),
-                'tactical_action': mock_torch.tensor([0.1, 0.2, 0.3], dtype=mock_torch.float32),
-                'sample_id': 'sample_000000'
-            }
-        ] * self.mock_config['data']['batch_size'] # Simulate a batch
+        mock_batch = {
+            'camera': mock_torch.stack([mock_torch.randn(3, 224, 224) for _ in range(self.mock_config['data']['batch_size'])]),
+            'lidar': mock_torch.stack([mock_torch.randn(self.mock_config['data']['lidar_points'], 3) for _ in range(self.mock_config['data']['batch_size'])]),
+            'radar': mock_torch.stack([mock_torch.randn(1, 64, 64) for _ in range(self.mock_config['data']['batch_size'])]),
+            'strategic_action': mock_torch.stack([mock_torch.tensor(0, dtype=mock_torch.long) for _ in range(self.mock_config['data']['batch_size'])]),
+            'tactical_action': mock_torch.stack([mock_torch.tensor([0.1, 0.2, 0.3], dtype=mock_torch.float32) for _ in range(self.mock_config['data']['batch_size'])]),
+            'sample_id': ['sample_000000'] * self.mock_config['data']['batch_size'],
+        }
+        mock_dataloader_instance.__iter__.return_value = [mock_batch]
 
         batch_count = 0
         for batch in dataloader:
@@ -219,11 +221,11 @@ class TestMultiModalDrivingDataset(unittest.TestCase):
             self.assertIn('strategic_action', batch)
             self.assertIn('tactical_action', batch)
             self.assertIn('sample_id', batch)
-            self.assertEqual(batch['camera'].shape, (3, 224, 224))
-            self.assertEqual(batch['lidar'].shape, (self.mock_config['data']['lidar_points'], 3))
-            self.assertEqual(batch['radar'].shape, (1, 64, 64))
+            self.assertEqual(batch['camera'].shape[0], self.mock_config['data']['batch_size'])
+            self.assertEqual(batch['lidar'].shape[0], self.mock_config['data']['batch_size'])
+            self.assertEqual(batch['radar'].shape[0], self.mock_config['data']['batch_size'])
 
-        self.assertEqual(batch_count, self.mock_config['data']['batch_size'])
+        self.assertEqual(batch_count, 1)
 
 if __name__ == '__main__':
     unittest.main()

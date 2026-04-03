@@ -1,4 +1,7 @@
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+REPO_ROOT = Path(__file__).resolve().parent
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))

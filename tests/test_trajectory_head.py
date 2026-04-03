@@ -1,7 +1,11 @@
 import torch
 import yaml
+from pathlib import Path
 from src.models.himac_jepa import HiMACJEPA
 from src.models.trajectory_planning_head import TrajectoryPlanningHead
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_trajectory_planning_head():
     print("\nRunning test_trajectory_planning_head...")
@@ -21,9 +25,9 @@ def test_trajectory_planning_head():
 def test_himac_jepa_with_trajectory_head():
     print("\nRunning test_himac_jepa_with_trajectory_head...")
     # Load the concrete model config plus downstream head settings.
-    with open("configs/config.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "config.yaml").open("r") as f:
         root_config = yaml.safe_load(f)
-    with open("configs/model/default.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "model" / "default.yaml").open("r") as f:
         model_config = yaml.safe_load(f)
 
     config = {

@@ -1,6 +1,7 @@
 import torch
 import torch.optim as optim
 import yaml
+from pathlib import Path
 
 from src.losses.predictive_loss import KLDivergenceLoss
 from src.losses.vicreg_loss import VICRegLoss
@@ -10,12 +11,15 @@ from src.training.masking import build_batch_masks
 from src.training.targets import build_ema_teacher, build_target_latent, update_ema_teacher
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def build_model_config():
-    with open("configs/config.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "config.yaml").open("r") as f:
         root_config = yaml.safe_load(f)
-    with open("configs/model/default.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "model" / "default.yaml").open("r") as f:
         model_config = yaml.safe_load(f)
-    with open("configs/training/default.yaml", "r") as f:
+    with (REPO_ROOT / "configs" / "training" / "default.yaml").open("r") as f:
         training_config = yaml.safe_load(f)
 
     return {
