@@ -38,6 +38,13 @@ def test_generate_temporal_mask():
     expected_masked_steps = int(10 * 0.6)
     assert torch.sum(mask).item() == expected_masked_steps
 
+def test_generate_temporal_mask_override():
+    masker = SpatioTemporalMasking(mask_ratio_temporal=0.5, num_temporal_steps=10)
+    mask = masker.generate_temporal_mask(num_temporal_steps=4)
+
+    assert mask.shape == (4,)
+    assert torch.sum(mask).item() == 2
+
 def test_apply_mask_2d():
     masker = SpatioTemporalMasking(mask_ratio_spatial=0.5)
     input_data = torch.ones(64, 64)

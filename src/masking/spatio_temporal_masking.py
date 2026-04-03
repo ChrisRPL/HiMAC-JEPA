@@ -65,14 +65,15 @@ class SpatioTemporalMasking:
 
         return torch.stack(masks, dim=0)  # (B, H_patches, W_patches)
 
-    def generate_temporal_mask(self) -> torch.Tensor:
+    def generate_temporal_mask(self, num_temporal_steps=None) -> torch.Tensor:
         """
         Generates a 1D temporal mask for future time steps.
         Output mask is (num_temporal_steps,) boolean tensor.
         """
-        num_masked_steps = int(self.num_temporal_steps * self.mask_ratio_temporal)
-        mask = torch.zeros(self.num_temporal_steps, dtype=torch.bool)
-        mask_indices = random.sample(range(self.num_temporal_steps), num_masked_steps)
+        total_steps = self.num_temporal_steps if num_temporal_steps is None else num_temporal_steps
+        num_masked_steps = int(total_steps * self.mask_ratio_temporal)
+        mask = torch.zeros(total_steps, dtype=torch.bool)
+        mask_indices = random.sample(range(total_steps), num_masked_steps)
         mask[mask_indices] = True
         return mask
 
@@ -126,7 +127,14 @@ class SpatioTemporalMasking:
         """
         return torch.nonzero(~mask.flatten(), as_tuple=True)[0]
 
-    def generate_joint_mask(self, camera_shape: tuple, lidar_shape: tuple, radar_shape: tuple, batch_size: int) -> dict:
+    def generate_joint_mask(
+        self,
+        camera_shape: tuple,
+        lidar_shape: tuple,
+        radar_shape: tuple,
+        batch_size: int,
+        num_temporal_steps=None
+    ) -> dict:
         """
         Generate synchronized masks across all modalities for a batch.
 
@@ -163,7 +171,7 @@ class SpatioTemporalMasking:
 
         # Generate temporal mask (same for all samples in batch for simplicity)
         # Could be different per sample if needed
-        temporal_mask = self.generate_temporal_mask()
+        temporal_mask = self.generate_temporal_mask(num_temporal_steps=num_temporal_steps)
         temporal_mask = temporal_mask.unsqueeze(0).expand(batch_size, -1)  # (B, T)
 
         return {
