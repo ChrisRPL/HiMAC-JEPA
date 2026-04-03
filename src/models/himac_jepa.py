@@ -275,6 +275,18 @@ class HiMACJEPA(nn.Module):
             Same as forward but processes temporal sequence
         """
         B, T = camera_seq.shape[:2]
+        temporal_mask = None
+        last_visible_idx = None
+
+        if masks is not None and 'temporal' in masks:
+            temporal_mask = masks['temporal'][:, :T].bool()
+            time_index = torch.arange(T, device=camera_seq.device).unsqueeze(0).expand(B, -1)
+            last_visible_idx = time_index.masked_fill(temporal_mask, -1).max(dim=1).values
+            last_visible_idx = torch.where(
+                last_visible_idx >= 0,
+                last_visible_idx,
+                torch.full_like(last_visible_idx, T - 1)
+            )
 
         # Process each timestep independently
         cam_features = []
@@ -282,10 +294,23 @@ class HiMACJEPA(nn.Module):
         radar_features = []
 
         for t in range(T):
+            camera_frame = camera_seq[:, t]
+            lidar_frame = lidar_seq[:, t]
+            radar_frame = radar_seq[:, t]
+
+            if temporal_mask is not None and t < temporal_mask.size(1):
+                frame_mask = temporal_mask[:, t]
+                camera_frame = camera_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
+                lidar_frame = lidar_frame.masked_fill(frame_mask.view(B, 1, 1), 0.0)
+                radar_frame = radar_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
+
+            if masks is not None and 'lidar' in masks:
+                lidar_frame = self.apply_lidar_mask(lidar_frame, masks['lidar'])
+
             # Encode frame t
-            cam_feat = self.camera_encoder(camera_seq[:, t])  # (B, D)
-            lidar_feat = self.lidar_encoder(lidar_seq[:, t])  # (B, D)
-            radar_feat = self.radar_encoder(radar_seq[:, t])  # (B, D)
+            cam_feat = self.camera_encoder(camera_frame)  # (B, D)
+            lidar_feat = self.lidar_encoder(lidar_frame)  # (B, D)
+            radar_feat = self.radar_encoder(radar_frame)  # (B, D)
 
             cam_features.append(cam_feat)
             lidar_features.append(lidar_feat)
@@ -302,17 +327,29 @@ class HiMACJEPA(nn.Module):
             lidar_agg = self.temporal_fusion(lidar_features, aggregate='last')  # (B, D)
             radar_agg = self.temporal_fusion(radar_features, aggregate='last')  # (B, D)
         else:
-            # Fallback: just use last frame
-            cam_agg = cam_features[:, -1, :]
-            lidar_agg = lidar_features[:, -1, :]
-            radar_agg = radar_features[:, -1, :]
+            if last_visible_idx is None:
+                cam_agg = cam_features[:, -1, :]
+                lidar_agg = lidar_features[:, -1, :]
+                radar_agg = radar_features[:, -1, :]
+            else:
+                gather_idx = last_visible_idx.view(B, 1, 1)
+                cam_agg = cam_features.gather(1, gather_idx.expand(-1, 1, cam_features.size(-1))).squeeze(1)
+                lidar_agg = lidar_features.gather(1, gather_idx.expand(-1, 1, lidar_features.size(-1))).squeeze(1)
+                radar_agg = radar_features.gather(1, gather_idx.expand(-1, 1, radar_features.size(-1))).squeeze(1)
 
         # Multi-modal fusion
         z_t = self.fusion(cam_agg, lidar_agg, radar_agg)
 
         # Encode actions (use last action or average)
-        strategic = strategic_seq[:, -1]  # Use last action
-        tactical = tactical_seq[:, -1, :]
+        if last_visible_idx is None:
+            strategic = strategic_seq[:, -1]
+            tactical = tactical_seq[:, -1, :]
+        else:
+            strategic = strategic_seq.gather(1, last_visible_idx.unsqueeze(1)).squeeze(1)
+            tactical = tactical_seq.gather(
+                1,
+                last_visible_idx.view(B, 1, 1).expand(-1, 1, tactical_seq.size(-1))
+            ).squeeze(1)
         action_latent = self.action_encoder(strategic, tactical)
 
         # Concatenate and predict
