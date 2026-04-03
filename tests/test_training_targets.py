@@ -1,11 +1,11 @@
 import torch
 
 from src.models.himac_jepa import HiMACJEPA
-from src.training.targets import build_target_latent
+from src.training.targets import build_ema_teacher, build_target_latent
 
 
-def build_test_model():
-    config = {
+def build_test_config():
+    return {
         "model": {
             "latent_dim": 128,
             "camera_encoder": {"depth": 2, "dropout": 0.0},
@@ -24,27 +24,47 @@ def build_test_model():
         "motion_prediction_head": {"output_dim": 60},
         "bev_segmentation_head": {"bev_h": 20, "bev_w": 20, "num_classes": 5},
     }
-    return HiMACJEPA(config)
 
 
-def test_build_target_latent_restores_training_mode():
-    model = build_test_model()
-    model.train()
+def test_build_target_latent_restores_teacher_training_mode():
+    config = build_test_config()
+    student = HiMACJEPA(config)
+    teacher = build_ema_teacher(config, student=student)
+    teacher.train()
 
     target_latent = build_target_latent(
-        model,
+        teacher,
         torch.randn(2, 3, 224, 224),
         torch.randn(2, 1024, 3),
         torch.randn(2, 1, 64, 64),
     )
 
     assert target_latent.shape == (2, 128)
-    assert model.training is True
+    assert teacher.training is True
+
+
+def test_build_target_latent_preserves_teacher_eval_mode():
+    config = build_test_config()
+    student = HiMACJEPA(config)
+    teacher = build_ema_teacher(config, student=student)
+    teacher.eval()
+
+    _ = build_target_latent(
+        teacher,
+        torch.randn(2, 3, 224, 224),
+        torch.randn(2, 1024, 3),
+        torch.randn(2, 1, 64, 64),
+    )
+
+    assert teacher.training is False
 
 
 def test_target_latent_is_observation_only():
-    model = build_test_model()
-    model.eval()
+    config = build_test_config()
+    student = HiMACJEPA(config)
+    teacher = build_ema_teacher(config, student=student)
+    student.eval()
+    teacher.eval()
 
     camera = torch.randn(2, 3, 224, 224)
     lidar = torch.randn(2, 1024, 3)
@@ -56,10 +76,10 @@ def test_target_latent_is_observation_only():
     tactical_b = torch.full((2, 3), 10.0)
 
     with torch.no_grad():
-        target_latent = build_target_latent(model, camera, lidar, radar)
-        obs_latent = model.encode_observations(camera, lidar, radar)
-        mu_a, _, _, _, _ = model(camera, lidar, radar, strategic_a, tactical_a)
-        mu_b, _, _, _, _ = model(camera, lidar, radar, strategic_b, tactical_b)
+        target_latent = build_target_latent(teacher, camera, lidar, radar)
+        obs_latent = teacher(camera, lidar, radar)
+        mu_a, _, _, _, _ = student(camera, lidar, radar, strategic_a, tactical_a)
+        mu_b, _, _, _, _ = student(camera, lidar, radar, strategic_b, tactical_b)
 
     assert torch.allclose(target_latent, obs_latent, atol=1e-6)
     assert not torch.allclose(mu_a, mu_b, atol=1e-5)
