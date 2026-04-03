@@ -80,6 +80,10 @@ class HiMACObservationTeacher(nn.Module):
                     teacher_module.parameters(), student_module.parameters()
                 ):
                     teacher_param.mul_(decay).add_(student_param, alpha=1 - decay)
+                for teacher_buffer, student_buffer in zip(
+                    teacher_module.buffers(), student_module.buffers()
+                ):
+                    teacher_buffer.copy_(student_buffer)
 
     def apply_lidar_mask(self, lidar, mask):
         masked_lidar = lidar.clone()

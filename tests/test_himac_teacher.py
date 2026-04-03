@@ -55,3 +55,25 @@ def test_teacher_ema_updates_observation_weights():
     teacher.update_from_student(student, decay=0.5)
 
     assert not torch.equal(initial, teacher.camera_encoder.proj.weight)
+
+
+def test_teacher_copies_batch_norm_buffers_from_student():
+    config = build_model_config()
+    student = HiMACJEPA(config)
+    teacher = HiMACObservationTeacher(config)
+    teacher.load_from_student(student)
+
+    student.train()
+    camera = torch.randn(4, 3, 224, 224)
+    lidar = torch.randn(4, 1024, 3)
+    radar = torch.randn(4, 1, 64, 64)
+    strategic = torch.randint(0, 10, (4,))
+    tactical = torch.randn(4, 3)
+
+    student(camera, lidar, radar, strategic, tactical)
+    teacher.update_from_student(student, decay=0.9)
+
+    assert torch.allclose(
+        teacher.lidar_encoder.mlp1[1].running_mean,
+        student.lidar_encoder.mlp1[1].running_mean,
+    )
