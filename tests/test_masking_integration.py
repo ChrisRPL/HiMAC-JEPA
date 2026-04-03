@@ -190,3 +190,67 @@ class TestMaskingIntegration:
         assert model.camera_encoder.proj.weight.grad is not None
         assert model.lidar_encoder.mlp1[0].weight.grad is not None
         assert model.action_encoder.strategic_embedding.weight.grad is not None
+
+    def test_spatial_masks_hide_camera_and_radar_content(self, model):
+        """Masked camera/radar content should not affect the latent output."""
+        batch_size = 2
+
+        camera = torch.randn(batch_size, 3, 224, 224)
+        lidar = torch.randn(batch_size, 1024, 3)
+        radar = torch.randn(batch_size, 1, 64, 64)
+        strategic_action = torch.randint(0, 10, (batch_size,))
+        tactical_action = torch.randn(batch_size, 3)
+
+        masks = {
+            'camera': torch.ones(batch_size, 14, 14, dtype=torch.bool),
+            'lidar': torch.zeros(batch_size, 1024, dtype=torch.bool),
+            'radar': torch.ones(batch_size, 64, 64, dtype=torch.bool),
+            'temporal': torch.zeros(batch_size, 5, dtype=torch.bool)
+        }
+
+        camera_alt = torch.randn_like(camera) * 100
+        radar_alt = torch.randn_like(radar) * 100
+
+        model.eval()
+        with torch.no_grad():
+            mu, _, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
+            mu_alt, _, _, _, _ = model(camera_alt, lidar, radar_alt, strategic_action, tactical_action, masks)
+
+        assert torch.allclose(mu, mu_alt, atol=1e-5)
+
+    def test_temporal_mask_ignores_masked_last_timestep(self, model):
+        """Masked final timestep should not influence temporal predictions."""
+        batch_size = 2
+        seq_len = 3
+
+        camera = torch.randn(batch_size, seq_len, 3, 224, 224)
+        lidar = torch.randn(batch_size, seq_len, 1024, 3)
+        radar = torch.randn(batch_size, seq_len, 1, 64, 64)
+        strategic_action = torch.randint(0, 10, (batch_size, seq_len))
+        tactical_action = torch.randn(batch_size, seq_len, 3)
+
+        masks = {
+            'camera': torch.zeros(batch_size, 14, 14, dtype=torch.bool),
+            'lidar': torch.zeros(batch_size, 1024, dtype=torch.bool),
+            'radar': torch.zeros(batch_size, 64, 64, dtype=torch.bool),
+            'temporal': torch.tensor([[False, False, True], [False, False, True]])
+        }
+
+        camera_alt = camera.clone()
+        lidar_alt = lidar.clone()
+        radar_alt = radar.clone()
+        strategic_alt = strategic_action.clone()
+        tactical_alt = tactical_action.clone()
+
+        camera_alt[:, -1] = torch.randn_like(camera_alt[:, -1]) * 100
+        lidar_alt[:, -1] = torch.randn_like(lidar_alt[:, -1]) * 100
+        radar_alt[:, -1] = torch.randn_like(radar_alt[:, -1]) * 100
+        strategic_alt[:, -1] = torch.randint(0, 10, (batch_size,))
+        tactical_alt[:, -1] = torch.randn_like(tactical_alt[:, -1]) * 100
+
+        model.eval()
+        with torch.no_grad():
+            mu, _, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
+            mu_alt, _, _, _, _ = model(camera_alt, lidar_alt, radar_alt, strategic_alt, tactical_alt, masks)
+
+        assert torch.allclose(mu, mu_alt, atol=1e-5)
