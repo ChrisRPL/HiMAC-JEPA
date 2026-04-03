@@ -7,6 +7,7 @@ from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
 from src.models.himac_jepa import HiMACJEPA
 from src.training.masking import build_batch_masks
+from src.training.targets import build_target_latent
 
 
 def update_ema_params(model, ema_model, decay):
@@ -71,11 +72,7 @@ def test_training_step():
 
     mu, log_var, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action)
 
-    with torch.no_grad():
-        ema_mu, _, _, _, _ = ema_model(
-            camera, lidar, radar, strategic_action, tactical_action
-        )
-        target_latent = ema_mu.detach()
+    target_latent = build_target_latent(ema_model, camera, lidar, radar)
 
     predictive_loss = predictive_loss_fn(
         mu, log_var, target_latent, torch.zeros_like(log_var)
@@ -141,16 +138,12 @@ def test_temporal_training_step_with_masking():
         masks,
     )
 
-    with torch.no_grad():
-        ema_mu, _, _, _, _ = ema_model(
-            target_camera,
-            target_lidar,
-            target_radar,
-            target_strategic,
-            target_tactical,
-            None,
-        )
-        target_latent = ema_mu.detach()
+    target_latent = build_target_latent(
+        ema_model,
+        target_camera,
+        target_lidar,
+        target_radar,
+    )
 
     predictive_loss = predictive_loss_fn(
         mu, log_var, target_latent, torch.zeros_like(log_var)
