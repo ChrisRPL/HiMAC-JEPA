@@ -259,6 +259,19 @@ class HiMACJEPA(nn.Module):
         masked_lidar[mask] = 0.0
         return masked_lidar
 
+    def apply_spatial_mask(self, tensor, mask):
+        """Apply per-sample spatial mask by zeroing masked patches/pixels."""
+        B, _, H, W = tensor.shape
+        mask_h, mask_w = mask.shape[-2:]
+
+        assert H % mask_h == 0 and W % mask_w == 0, "Mask resolution must divide input resolution"
+
+        patch_h = H // mask_h
+        patch_w = W // mask_w
+        expanded_mask = mask.bool().repeat_interleave(patch_h, dim=1).repeat_interleave(patch_w, dim=2)
+
+        return tensor.masked_fill(expanded_mask.unsqueeze(1), 0.0)
+
     def _forward_temporal(self, camera_seq, lidar_seq, radar_seq, strategic_seq, tactical_seq, masks=None):
         """
         Forward pass with temporal sequences.
@@ -304,8 +317,12 @@ class HiMACJEPA(nn.Module):
                 lidar_frame = lidar_frame.masked_fill(frame_mask.view(B, 1, 1), 0.0)
                 radar_frame = radar_frame.masked_fill(frame_mask.view(B, 1, 1, 1), 0.0)
 
+            if masks is not None and 'camera' in masks:
+                camera_frame = self.apply_spatial_mask(camera_frame, masks['camera'])
             if masks is not None and 'lidar' in masks:
                 lidar_frame = self.apply_lidar_mask(lidar_frame, masks['lidar'])
+            if masks is not None and 'radar' in masks:
+                radar_frame = self.apply_spatial_mask(radar_frame, masks['radar'])
 
             # Encode frame t
             cam_feat = self.camera_encoder(camera_frame)  # (B, D)
@@ -393,10 +410,13 @@ class HiMACJEPA(nn.Module):
         # Otherwise, proceed with single-frame forward
         # Apply masking if provided (for JEPA training)
         if masks is not None:
+            if 'camera' in masks:
+                camera = self.apply_spatial_mask(camera, masks['camera'])
             # Apply LiDAR mask (simple zero-out approach)
-            lidar = self.apply_lidar_mask(lidar, masks['lidar'])
-            # Note: Camera and Radar masking would require more complex logic
-            # For now, we process full inputs and apply masking at latent level
+            if 'lidar' in masks:
+                lidar = self.apply_lidar_mask(lidar, masks['lidar'])
+            if 'radar' in masks:
+                radar = self.apply_spatial_mask(radar, masks['radar'])
 
         # Encode multi-modal sensor inputs
         cam_feat = self.camera_encoder(camera)
