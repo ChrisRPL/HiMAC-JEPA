@@ -18,6 +18,19 @@ The architecture consists of several key components:
 4.  **JEPA Predictor**: A core module that predicts future latent distributions conditioned on current state and actions.
 5.  **Uncertainty Quantification**: Explicitly outputs distribution parameters ($\mu, \sigma$) to quantify prediction confidence.
 
+## Current Status (April 2026)
+- Core training scaffold is stable and regression-tested. Current merge tip passed `pytest -q` with **190 passed, 66 skipped**.
+- The active JEPA path now includes:
+  - spatio-temporal masking across camera, radar, and temporal context
+  - an **observation-only EMA teacher** for target latents
+  - action-conditioned online prediction with guards against masked-context leakage
+- The repo is ready for controlled research iterations on objective design and temporal prediction.
+- The repo is **not benchmark-complete yet**:
+  - some downstream evaluation metrics still use placeholder logic
+  - temporal-consistency evaluation is still scaffolded
+  - action extraction still includes heuristic / placeholder components
+  - no benchmark table on real nuScenes runs is checked into the repo yet
+
 ## Getting Started
 ### Prerequisites
 - Python 3.10+
@@ -129,6 +142,8 @@ python train.py +experiment=ablation_no_masking
 
 ### Evaluation
 
+**Status note:** intrinsic evaluation runs today, but some downstream and temporal metrics are still scaffolds until label-backed benchmark wiring is completed.
+
 **Run evaluation on a trained model:**
 ```bash
 # Evaluate with default settings
@@ -195,7 +210,7 @@ temporal:
 
 3. **Training Objective**:
    - **Online encoder**: Processes context frames → predicts future latent
-   - **Target encoder (EMA)**: Processes target frames → provides ground truth latent
+   - **Observation-only EMA teacher**: Processes target frames → provides target latent without action leakage
    - **Loss**: KL divergence + VICReg between predicted and target latents
 
 **Temporal data shapes:**
@@ -482,36 +497,36 @@ python train.py data=nuscenes wandb.enabled=true
 ```
 
 ## Implementation Status
-- [x] Project Structure & Hydra Config System
-- [x] Core Model Architecture (Encoders, Fusion, Predictor)
-- [x] Hierarchical Action Encoder
-- [x] Enhanced Encoder Architectures (ViT-12, Hierarchical PointNet, Velocity-aware Radar)
-- [x] Data Loading Pipeline
-- [x] nuScenes Dataset Integration
-- [x] Multi-Modal Preprocessing (Camera, LiDAR, Radar)
-- [x] Action Extraction from Ego Vehicle Data
-- [x] JEPA Self-Supervised Training Loop
-- [x] Spatio-Temporal Masking Strategy
-- [x] EMA Target Encoder
-- [x] VICReg Regularization
-- [x] Downstream Task Heads (Trajectory, Motion, BEV Segmentation)
-- [x] Evaluation Metrics (Intrinsic & Downstream)
-- [x] Ablation Study Configurations
-- [x] Weights & Biases Integration
-- [x] Temporal Sequence Loading & Future Prediction
-- [x] Temporal Fusion with Transformer Aggregation
-- [x] Comprehensive Temporal Validation (Continuity, Timestamps, Sensors)
-- [x] Ground Truth Label Extraction (Trajectory, BEV, Motion)
-- [x] Label Caching System for Fast Loading
-- [x] Parallel Label Extraction Script
-- [x] Baseline Implementations (Camera-Only, LiDAR-Only, Radar-Only, I-JEPA, V-JEPA)
-- [x] Baseline Training Script with Config System
-- [x] Baseline Evaluation & Comparison Script
-- [x] Publication-Ready Comparison Tables & Plots
-- [ ] Actual Baseline Training & Results (requires dataset)
-- [ ] Waymo Open Dataset Integration
-- [ ] CARLA Closed-Loop Evaluation
-- [ ] Multi-GPU Distributed Training
+
+**Implemented and regression-tested**
+- Hydra config structure and training entrypoint
+- Core HiMAC-JEPA model: encoders, fusion, predictor, uncertainty head
+- Hierarchical action conditioning
+- Single-frame and temporal data loading
+- Spatio-temporal masking utilities
+- Observation-only EMA teacher for target latents
+- Downstream heads: trajectory, motion, BEV segmentation
+- Baseline model implementations and training/evaluation scripts
+- Label extraction and caching pipeline
+
+**Implemented, but still needs honest benchmark validation**
+- Downstream evaluation metrics: interfaces exist, but some paths still use placeholder values
+- Temporal-consistency metric: scaffolded, not yet backed by sequential evaluation
+- nuScenes action extraction: tactical/strategic labels still include heuristic or placeholder logic
+- Baseline comparisons: scripts exist, but no checked-in real benchmark table yet
+
+**Near-term roadmap**
+1. **Future-action temporal JEPA**
+   Student sees planned future actions; teacher stays observation-only. Goal: make the action-conditioning claim real for multi-step prediction.
+2. **Honest nuScenes-mini benchmark**
+   Replace placeholder evaluation with one reproducible benchmark loop so architecture changes can be ranked.
+3. **Structured JEPA targets**
+   Move beyond one pooled latent toward token / slot targets so masking supervises local structure, not just a single global vector.
+
+**Longer-term roadmap**
+- Waymo Open Dataset integration
+- CARLA closed-loop evaluation
+- Multi-GPU distributed training
 
 ## License
 This project is licensed under the MIT License.
