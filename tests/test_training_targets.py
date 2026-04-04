@@ -83,3 +83,55 @@ def test_target_latent_is_observation_only():
 
     assert torch.allclose(target_latent, obs_latent, atol=1e-6)
     assert not torch.allclose(mu_a, mu_b, atol=1e-5)
+
+
+def test_temporal_target_latent_stays_observation_only_with_future_actions():
+    config = build_test_config()
+    student = HiMACJEPA(config)
+    teacher = build_ema_teacher(config, student=student)
+    student.eval()
+    teacher.eval()
+
+    batch_size = 2
+    context_steps = 3
+    future_steps = 2
+
+    context_camera = torch.randn(batch_size, context_steps, 3, 224, 224)
+    context_lidar = torch.randn(batch_size, context_steps, 1024, 3)
+    context_radar = torch.randn(batch_size, context_steps, 1, 64, 64)
+    context_strategic = torch.randint(0, 10, (batch_size, context_steps))
+    context_tactical = torch.randn(batch_size, context_steps, 3)
+
+    target_camera = torch.randn(batch_size, future_steps, 3, 224, 224)
+    target_lidar = torch.randn(batch_size, future_steps, 1024, 3)
+    target_radar = torch.randn(batch_size, future_steps, 1, 64, 64)
+
+    future_strategic_a = torch.tensor([[0, 1], [2, 3]])
+    future_tactical_a = torch.zeros(batch_size, future_steps, 3)
+    future_strategic_b = torch.tensor([[4, 5], [6, 7]])
+    future_tactical_b = torch.full((batch_size, future_steps, 3), 5.0)
+
+    with torch.no_grad():
+        target_latent = build_target_latent(teacher, target_camera, target_lidar, target_radar)
+        obs_latent = teacher(target_camera, target_lidar, target_radar)
+        mu_a, _, _, _, _ = student(
+            context_camera,
+            context_lidar,
+            context_radar,
+            context_strategic,
+            context_tactical,
+            future_strategic_action=future_strategic_a,
+            future_tactical_action=future_tactical_a,
+        )
+        mu_b, _, _, _, _ = student(
+            context_camera,
+            context_lidar,
+            context_radar,
+            context_strategic,
+            context_tactical,
+            future_strategic_action=future_strategic_b,
+            future_tactical_action=future_tactical_b,
+        )
+
+    assert torch.allclose(target_latent, obs_latent, atol=1e-6)
+    assert not torch.allclose(mu_a, mu_b, atol=1e-5)
