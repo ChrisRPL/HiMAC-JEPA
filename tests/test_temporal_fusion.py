@@ -200,8 +200,8 @@ class TestTemporalTransformer:
         x = torch.randn(4, 5, 256, requires_grad=True)
         out = model(x, aggregate='last')
 
-        # Compute loss and backward
-        loss = out.sum()
+        # Use squared energy to avoid the zero-sum cancellation that can happen after normalization.
+        loss = out.pow(2).mean()
         loss.backward()
 
         # Check gradients exist
