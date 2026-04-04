@@ -128,6 +128,8 @@ def test_temporal_training_step_with_masking():
         context_strategic,
         context_tactical,
         masks,
+        future_strategic_action=target_strategic,
+        future_tactical_action=target_tactical,
     )
 
     target_latent = build_target_latent(

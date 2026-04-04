@@ -149,15 +149,24 @@ def main(cfg: DictConfig):
                 if cfg.training.use_masking and masker is not None:
                     masks = build_batch_masks(masker, camera, lidar, radar)
 
-                # Online encoder: predict future from context
-                mu, log_var, _, _, _ = model(
-                    camera, lidar, radar, strategic_action, tactical_action, masks
-                )
-
                 # Target encoder: encode future (no masks)
                 target_camera = target['camera']
                 target_lidar = target['lidar']
                 target_radar = target['radar']
+                target_strategic_action = target['strategic_action']
+                target_tactical_action = target['tactical_action']
+
+                # Student predicts future latent using visible context plus planned future actions.
+                mu, log_var, _, _, _ = model(
+                    camera,
+                    lidar,
+                    radar,
+                    strategic_action,
+                    tactical_action,
+                    masks,
+                    future_strategic_action=target_strategic_action,
+                    future_tactical_action=target_tactical_action,
+                )
                 target_latent = build_target_latent(
                     ema_teacher, target_camera, target_lidar, target_radar
                 )
