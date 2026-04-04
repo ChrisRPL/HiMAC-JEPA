@@ -350,7 +350,27 @@ class HiMACJEPA(nn.Module):
 
         return self._encode_single_observation(camera, lidar, radar, masks=masks)
 
-    def _forward_temporal(self, camera_seq, lidar_seq, radar_seq, strategic_seq, tactical_seq, masks=None):
+    def _encode_action_sequence(self, strategic_seq, tactical_seq):
+        """Encode a sequence of actions and average them into one latent plan."""
+        B, T = strategic_seq.shape
+        action_latents = self.action_encoder(
+            strategic_seq.reshape(B * T),
+            tactical_seq.reshape(B * T, tactical_seq.size(-1))
+        )
+        action_latents = action_latents.view(B, T, -1)
+        return action_latents.mean(dim=1)
+
+    def _forward_temporal(
+        self,
+        camera_seq,
+        lidar_seq,
+        radar_seq,
+        strategic_seq,
+        tactical_seq,
+        masks=None,
+        future_strategic_seq=None,
+        future_tactical_seq=None
+    ):
         """
         Forward pass with temporal sequences.
 
@@ -370,7 +390,7 @@ class HiMACJEPA(nn.Module):
             camera_seq, lidar_seq, radar_seq, masks=masks
         )
 
-        # Encode actions (use last action or average)
+        # Encode context action at the last visible timestep.
         if last_visible_idx is None:
             strategic = strategic_seq[:, -1]
             tactical = tactical_seq[:, -1, :]
@@ -381,6 +401,12 @@ class HiMACJEPA(nn.Module):
                 last_visible_idx.view(B, 1, 1).expand(-1, 1, tactical_seq.size(-1))
             ).squeeze(1)
         action_latent = self.action_encoder(strategic, tactical)
+        if future_strategic_seq is not None and future_tactical_seq is not None:
+            future_action_latent = self._encode_action_sequence(
+                future_strategic_seq,
+                future_tactical_seq
+            )
+            action_latent = 0.5 * (action_latent + future_action_latent)
         if all_masked is not None:
             action_latent = action_latent.masked_fill(all_masked.unsqueeze(1), 0.0)
 
@@ -397,7 +423,17 @@ class HiMACJEPA(nn.Module):
 
         return mu, log_var, trajectory, motion_predictions, bev_segmentation_map
 
-    def forward(self, camera, lidar, radar, strategic_action, tactical_action, masks=None):
+    def forward(
+        self,
+        camera,
+        lidar,
+        radar,
+        strategic_action,
+        tactical_action,
+        masks=None,
+        future_strategic_action=None,
+        future_tactical_action=None
+    ):
         """Forward pass with action conditioning and optional masking.
 
         Automatically detects if input is temporal sequence or single frame.
@@ -409,6 +445,8 @@ class HiMACJEPA(nn.Module):
             strategic_action: (B,) or (B, T) if temporal
             tactical_action: (B, D) or (B, T, D) if temporal
             masks: Optional dict of masks for JEPA training
+            future_strategic_action: Optional (B, H) future action plan for temporal inputs
+            future_tactical_action: Optional (B, H, D) future action plan for temporal inputs
 
         Returns:
             Tuple of (mu, log_var, trajectory, motion_predictions, bev_segmentation_map)
@@ -419,7 +457,14 @@ class HiMACJEPA(nn.Module):
         if is_temporal:
             # Route to temporal forward
             return self._forward_temporal(
-                camera, lidar, radar, strategic_action, tactical_action, masks
+                camera,
+                lidar,
+                radar,
+                strategic_action,
+                tactical_action,
+                masks,
+                future_strategic_seq=future_strategic_action,
+                future_tactical_seq=future_tactical_action
             )
 
         # Otherwise, proceed with single-frame forward

@@ -266,16 +266,68 @@ class TestMaskingIntegration:
 
         assert torch.allclose(mu, mu_alt, atol=1e-5)
 
-    def test_all_masked_temporal_context_ignores_actions(self, model):
-        """If every timestep is masked, temporal actions should not leak into the output."""
+    def test_future_actions_influence_temporal_prediction(self, model):
+        """Visible context plus a different future plan should change the student output."""
         batch_size = 2
         seq_len = 3
+        horizon = 2
 
         camera = torch.randn(batch_size, seq_len, 3, 224, 224)
         lidar = torch.randn(batch_size, seq_len, 1024, 3)
         radar = torch.randn(batch_size, seq_len, 1, 64, 64)
         strategic_action = torch.randint(0, 10, (batch_size, seq_len))
         tactical_action = torch.randn(batch_size, seq_len, 3)
+
+        future_strategic = torch.randint(0, 10, (batch_size, horizon))
+        future_tactical = torch.randn(batch_size, horizon, 3)
+        future_strategic_alt = (future_strategic + 1) % 10
+        future_tactical_alt = future_tactical + 5.0
+
+        masks = {
+            'camera': torch.zeros(batch_size, 14, 14, dtype=torch.bool),
+            'lidar': torch.zeros(batch_size, 1024, dtype=torch.bool),
+            'radar': torch.zeros(batch_size, 64, 64, dtype=torch.bool),
+            'temporal': torch.zeros(batch_size, seq_len, dtype=torch.bool)
+        }
+
+        model.eval()
+        with torch.no_grad():
+            mu, _, _, _, _ = model(
+                camera,
+                lidar,
+                radar,
+                strategic_action,
+                tactical_action,
+                masks,
+                future_strategic_action=future_strategic,
+                future_tactical_action=future_tactical,
+            )
+            mu_alt, _, _, _, _ = model(
+                camera,
+                lidar,
+                radar,
+                strategic_action,
+                tactical_action,
+                masks,
+                future_strategic_action=future_strategic_alt,
+                future_tactical_action=future_tactical_alt,
+            )
+
+        assert not torch.allclose(mu, mu_alt)
+
+    def test_all_masked_temporal_context_ignores_actions(self, model):
+        """If every timestep is masked, context or future actions should not leak into the output."""
+        batch_size = 2
+        seq_len = 3
+        horizon = 2
+
+        camera = torch.randn(batch_size, seq_len, 3, 224, 224)
+        lidar = torch.randn(batch_size, seq_len, 1024, 3)
+        radar = torch.randn(batch_size, seq_len, 1, 64, 64)
+        strategic_action = torch.randint(0, 10, (batch_size, seq_len))
+        tactical_action = torch.randn(batch_size, seq_len, 3)
+        future_strategic = torch.randint(0, 10, (batch_size, horizon))
+        future_tactical = torch.randn(batch_size, horizon, 3)
 
         masks = {
             'camera': torch.zeros(batch_size, 14, 14, dtype=torch.bool),
@@ -286,10 +338,30 @@ class TestMaskingIntegration:
 
         strategic_alt = torch.randint(0, 10, (batch_size, seq_len))
         tactical_alt = torch.randn(batch_size, seq_len, 3) * 100
+        future_strategic_alt = torch.randint(0, 10, (batch_size, horizon))
+        future_tactical_alt = torch.randn(batch_size, horizon, 3) * 100
 
         model.eval()
         with torch.no_grad():
-            mu, _, _, _, _ = model(camera, lidar, radar, strategic_action, tactical_action, masks)
-            mu_alt, _, _, _, _ = model(camera, lidar, radar, strategic_alt, tactical_alt, masks)
+            mu, _, _, _, _ = model(
+                camera,
+                lidar,
+                radar,
+                strategic_action,
+                tactical_action,
+                masks,
+                future_strategic_action=future_strategic,
+                future_tactical_action=future_tactical,
+            )
+            mu_alt, _, _, _, _ = model(
+                camera,
+                lidar,
+                radar,
+                strategic_alt,
+                tactical_alt,
+                masks,
+                future_strategic_action=future_strategic_alt,
+                future_tactical_action=future_tactical_alt,
+            )
 
         assert torch.allclose(mu, mu_alt, atol=1e-5)
