@@ -142,7 +142,7 @@ python train.py +experiment=ablation_no_masking
 
 ### Evaluation
 
-**Status note:** intrinsic evaluation runs today, but some downstream and temporal metrics are still scaffolds until label-backed benchmark wiring is completed.
+**Status note:** evaluation support is partial. Intrinsic probes run today, but downstream trajectory / BEV metrics and temporal-consistency still contain placeholder logic and should be treated as scaffolding, not benchmark results.
 
 **Run evaluation on a trained model:**
 ```bash
@@ -378,6 +378,8 @@ Cache statistics:
 
 HiMAC-JEPA includes 5 baseline models for comprehensive comparison:
 
+**Status note:** baseline training scripts and report formatting are implemented, but current comparison outputs are not yet validated research results. The checked-in evaluation path still contains placeholder metrics.
+
 **Single-Modal Baselines:**
 1. **Camera-Only**: ResNet18 + LSTM, supervised future frame prediction
 2. **LiDAR-Only**: Simplified PointNet++, supervised future cloud prediction
@@ -433,7 +435,7 @@ python scripts/evaluate_baselines.py \
 # - results/baselines/statistical_tests.txt   (significance tests)
 ```
 
-**Expected Performance Hierarchy** (based on method design):
+**Research Hypothesis: Expected Performance Hierarchy** (not benchmarked yet):
 ```
 Trajectory Prediction (ADE ↓):
   HiMAC-JEPA < V-JEPA < I-JEPA < Camera-Only < LiDAR-Only < Radar-Only
@@ -454,7 +456,7 @@ Inference Time (ms ↓):
 - **No Actions vs HiMAC-JEPA**: Shows benefit of hierarchical action conditioning
 - **Simple Fusion (V-JEPA) vs Hierarchical (HiMAC-JEPA)**: Shows benefit of hierarchical multi-modal architecture
 
-See `docs/BASELINES.md` for detailed baseline documentation and results.
+See `docs/BASELINES.md` for baseline implementation notes and planned comparison workflow.
 
 ### Ablation Studies
 
