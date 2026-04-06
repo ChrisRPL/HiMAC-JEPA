@@ -27,6 +27,15 @@ class _ConstantPredictionModel:
         return latent, log_var, trajectory, motion, bev_logits
 
 
+class _TemporalOnlyModel:
+    def eval(self):
+        return self
+
+    def encode_observations(self, camera, lidar, radar, masks=None):
+        pooled = camera.mean(dim=(1, 2, 3))
+        return torch.stack([pooled, torch.zeros_like(pooled)], dim=1)
+
+
 class TestIntrinsicMetrics:
     """Test intrinsic evaluation metrics."""
 
@@ -54,6 +63,49 @@ class TestIntrinsicMetrics:
 
         # TODO: Test with known embeddings
         assert True  # Placeholder
+
+    def test_run_all_skips_latent_mse_without_teacher(self):
+        from types import SimpleNamespace
+        from src.evaluation.intrinsic_metrics import IntrinsicEvaluator
+
+        config = SimpleNamespace(
+            metrics=SimpleNamespace(intrinsic=["latent_mse"]),
+            intrinsic=SimpleNamespace(
+                linear_probe_tasks=[],
+                num_probe_epochs=1,
+                probe_learning_rate=0.001,
+                compute_temporal_consistency=False,
+                temporal_window=3,
+            ),
+        )
+
+        evaluator = IntrinsicEvaluator(_DummyEvalModel(), [], "cpu")
+        results = evaluator.run_all(config)
+
+        assert "intrinsic/latent_mse" not in results
+
+    def test_temporal_consistency_uses_temporal_batches(self):
+        from src.evaluation.intrinsic_metrics import IntrinsicEvaluator
+
+        batch = {
+            "context": {
+                "camera": torch.tensor(
+                    [[
+                        [[[0.0, 0.0], [0.0, 0.0]]],
+                        [[[1.0, 1.0], [1.0, 1.0]]],
+                        [[[3.0, 3.0], [3.0, 3.0]]],
+                    ]],
+                    dtype=torch.float32,
+                ),
+                "lidar": torch.zeros(1, 3, 2, 3),
+                "radar": torch.zeros(1, 3, 1, 2, 2),
+            }
+        }
+
+        evaluator = IntrinsicEvaluator(_TemporalOnlyModel(), [batch], "cpu")
+        score = evaluator.temporal_consistency()
+
+        assert score == pytest.approx(1.5)
 
 
 class TestDownstreamMetrics:

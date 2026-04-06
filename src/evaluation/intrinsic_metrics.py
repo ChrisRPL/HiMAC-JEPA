@@ -2,9 +2,17 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from sklearn.metrics import silhouette_score
-from sklearn.linear_model import Ridge, LogisticRegression
 from typing import Dict, Tuple, Optional
+
+try:
+    from sklearn.metrics import silhouette_score
+    from sklearn.linear_model import Ridge, LogisticRegression
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    silhouette_score = None
+    Ridge = None
+    LogisticRegression = None
+    SKLEARN_AVAILABLE = False
 
 
 class IntrinsicEvaluator:
@@ -31,6 +39,10 @@ class IntrinsicEvaluator:
         Returns:
             Average latent MSE across validation set
         """
+        if not hasattr(self.model, 'ema_model'):
+            print("Warning: Latent MSE requires model.ema_model; skipping metric")
+            return None
+
         total_mse = 0.0
         num_batches = 0
 
@@ -48,16 +60,9 @@ class IntrinsicEvaluator:
                     camera, lidar, radar, strategic, tactical, masks=None
                 )
 
-                # Get target encoder predictions (EMA model if available)
-                # Note: This assumes model has an ema_model attribute
-                # For evaluation without EMA, we compute self-consistency
-                if hasattr(self.model, 'ema_model'):
-                    target_mu, _, _, _, _ = self.model.ema_model(
-                        camera, lidar, radar, strategic, tactical, masks=None
-                    )
-                else:
-                    # Fallback: use same model with detached gradients
-                    target_mu = mu.detach()
+                target_mu, _, _, _, _ = self.model.ema_model(
+                    camera, lidar, radar, strategic, tactical, masks=None
+                )
 
                 # Compute MSE
                 mse = torch.mean((mu - target_mu) ** 2)
@@ -86,11 +91,15 @@ class IntrinsicEvaluator:
         Returns:
             Probe score (R² for regression, accuracy for classification)
         """
+        if not SKLEARN_AVAILABLE:
+            print("Warning: Linear probe requires scikit-learn; skipping metric")
+            return None
+
         # Extract frozen embeddings and labels
         embeddings, labels = self._extract_embeddings(task)
 
         if len(embeddings) == 0:
-            return 0.0
+            return None
 
         # Split train/val (80/20)
         split_idx = int(0.8 * len(embeddings))
@@ -126,6 +135,10 @@ class IntrinsicEvaluator:
         Returns:
             Silhouette score in [-1, 1] (higher = better clustering)
         """
+        if not SKLEARN_AVAILABLE:
+            print("Warning: Embedding silhouette requires scikit-learn; skipping metric")
+            return None
+
         embeddings = []
         labels = []
 
@@ -153,7 +166,7 @@ class IntrinsicEvaluator:
         unique_labels = np.unique(labels)
         if len(unique_labels) < 2:
             # Silhouette score requires at least 2 clusters
-            return 0.0
+            return None
 
         # Compute silhouette score
         try:
@@ -177,15 +190,50 @@ class IntrinsicEvaluator:
         Returns:
             Average temporal consistency score (lower = more consistent)
         """
-        # TODO: Requires sequential data loading with temporal structure
-        # Current dataloader doesn't preserve temporal ordering
-        # For now, return placeholder
-        # Future: implement temporal dataloader or use scene-based sampling
+        total_consistency = 0.0
+        num_sequences = 0
 
-        print("Warning: Temporal consistency requires sequential data loading")
-        print("This metric is not yet implemented - returning 0.0")
+        if not hasattr(self.model, 'encode_observations'):
+            print("Warning: Temporal consistency requires model.encode_observations; skipping metric")
+            return None
 
-        return 0.0
+        with torch.no_grad():
+            for batch in self.dataloader:
+                if 'context' in batch:
+                    sequence = batch['context']
+                    camera = sequence['camera'].to(self.device)
+                    lidar = sequence['lidar'].to(self.device)
+                    radar = sequence['radar'].to(self.device)
+                elif batch.get('camera') is not None and batch['camera'].dim() == 5:
+                    camera = batch['camera'].to(self.device)
+                    lidar = batch['lidar'].to(self.device)
+                    radar = batch['radar'].to(self.device)
+                else:
+                    continue
+
+                latents = []
+                seq_len = camera.size(1)
+                for timestep in range(seq_len):
+                    latents.append(
+                        self.model.encode_observations(
+                            camera[:, timestep],
+                            lidar[:, timestep],
+                            radar[:, timestep],
+                            masks=None,
+                        )
+                    )
+
+                latents = torch.stack(latents, dim=1)
+                deltas = latents[:, 1:] - latents[:, :-1]
+                consistency = torch.norm(deltas, dim=-1).mean()
+                total_consistency += consistency.item()
+                num_sequences += 1
+
+        if num_sequences == 0:
+            print("Warning: Temporal consistency requires temporal sequence batches; skipping metric")
+            return None
+
+        return total_consistency / num_sequences
 
     def _extract_embeddings(self, task: str) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -248,7 +296,9 @@ class IntrinsicEvaluator:
         # Latent MSE
         if 'latent_mse' in config.metrics.intrinsic:
             print("  Computing latent MSE...")
-            results['intrinsic/latent_mse'] = self.compute_latent_mse()
+            latent_mse = self.compute_latent_mse()
+            if latent_mse is not None:
+                results['intrinsic/latent_mse'] = latent_mse
 
         # Linear probing
         if 'linear_probe_accuracy' in config.metrics.intrinsic:
@@ -259,19 +309,24 @@ class IntrinsicEvaluator:
                     num_epochs=config.intrinsic.num_probe_epochs,
                     lr=config.intrinsic.probe_learning_rate
                 )
-                results[f'intrinsic/linear_probe_{task}'] = score
+                if score is not None:
+                    results[f'intrinsic/linear_probe_{task}'] = score
 
         # Embedding silhouette
         if 'embedding_silhouette' in config.metrics.intrinsic:
             print("  Computing embedding silhouette score...")
-            results['intrinsic/silhouette_score'] = self.embedding_silhouette()
+            score = self.embedding_silhouette()
+            if score is not None:
+                results['intrinsic/silhouette_score'] = score
 
         # Temporal consistency
         if 'temporal_consistency' in config.metrics.intrinsic:
             if config.intrinsic.compute_temporal_consistency:
                 print("  Computing temporal consistency...")
-                results['intrinsic/temporal_consistency'] = self.temporal_consistency(
+                temporal_consistency = self.temporal_consistency(
                     window=config.intrinsic.temporal_window
                 )
+                if temporal_consistency is not None:
+                    results['intrinsic/temporal_consistency'] = temporal_consistency
 
         return results

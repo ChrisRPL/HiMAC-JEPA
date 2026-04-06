@@ -110,7 +110,18 @@ def evaluate(cfg: DictConfig):
             collate_fn = collate_evaluation_batch
             print("Enabled label-backed evaluation targets for nuScenes benchmark")
 
-        val_dataset = NuScenesMultiModalDataset(data_cfg, split='val')
+        base_dataset = NuScenesMultiModalDataset(data_cfg, split='val')
+        if data_cfg.get('temporal', {}).get('enabled', False):
+            from src.data.temporal_dataset import TemporalNuScenesDataset
+
+            val_dataset = TemporalNuScenesDataset(
+                base_dataset=base_dataset,
+                config=data_cfg.temporal,
+                split='val'
+            )
+            print(f"Using temporal nuScenes evaluation set: {len(val_dataset)} sequences")
+        else:
+            val_dataset = base_dataset
     else:
         print("Using dummy dataset...")
         dataset_config = {
