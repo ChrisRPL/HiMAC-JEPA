@@ -21,6 +21,41 @@ class DownstreamEvaluator:
         self.device = device
         self.model.eval()
 
+    def _reshape_trajectory_prediction(self, prediction: torch.Tensor) -> torch.Tensor:
+        """Reshape flattened trajectory outputs into (B, T, 2)."""
+        if prediction.dim() == 3:
+            return prediction
+
+        if prediction.dim() != 2 or prediction.size(-1) % 2 != 0:
+            raise ValueError(f"Unexpected trajectory prediction shape: {tuple(prediction.shape)}")
+
+        return prediction.view(prediction.size(0), -1, 2)
+
+    def _align_trajectory_targets(
+        self,
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Align trajectory predictions with available ground-truth steps."""
+        prediction = self._reshape_trajectory_prediction(prediction)
+        target = target.to(prediction.device)
+
+        max_steps = min(prediction.size(1), target.size(1))
+        prediction = prediction[:, :max_steps]
+        target = target[:, :max_steps]
+
+        if valid_mask is None:
+            valid_mask = torch.ones(
+                prediction.shape[:2],
+                device=prediction.device,
+                dtype=torch.bool
+            )
+        else:
+            valid_mask = valid_mask[:, :max_steps].to(prediction.device).bool()
+
+        return prediction, target, valid_mask
+
     def trajectory_metrics(
         self,
         horizon=30,
@@ -58,22 +93,28 @@ class DownstreamEvaluator:
                     camera, lidar, radar, strategic, tactical, masks=None
                 )
 
-                # TODO: Ground truth trajectories need to be added to dataset
-                # For now, we compute self-consistency metrics
-                # gt_trajectory = batch.get('future_trajectory')
+                gt_trajectory = batch.get('trajectory_ego')
+                valid_mask = batch.get('trajectory_valid_mask')
+                if gt_trajectory is None:
+                    raise ValueError(
+                        "trajectory_metrics requires 'trajectory_ego' labels in the evaluation batch"
+                    )
 
-                # Placeholder implementation
-                # In production, compute:
-                # ade = self._compute_ade(trajectory_pred, gt_trajectory)
-                # fde = self._compute_fde(trajectory_pred, gt_trajectory)
+                trajectory_pred, gt_trajectory, valid_mask = self._align_trajectory_targets(
+                    trajectory_pred,
+                    gt_trajectory,
+                    valid_mask,
+                )
 
-                # For now, return 0.0 as placeholder
-                ade = 0.0
-                fde = 0.0
+                ade = self._compute_ade(trajectory_pred, gt_trajectory, valid_mask)
+                fde = self._compute_fde(trajectory_pred, gt_trajectory, valid_mask)
 
-                total_ade += ade
-                total_fde += fde
-                num_samples += 1
+                batch_size = trajectory_pred.size(0)
+                total_ade += ade * batch_size
+                total_fde += fde * batch_size
+                total_min_ade += ade * batch_size
+                total_min_fde += fde * batch_size
+                num_samples += batch_size
 
         return {
             'downstream/trajectory_ade': total_ade / num_samples if num_samples > 0 else 0.0,
@@ -114,19 +155,21 @@ class DownstreamEvaluator:
                     camera, lidar, radar, strategic, tactical, masks=None
                 )
 
-                # TODO: Ground truth BEV segmentation needs to be added to dataset
-                # gt_bev = batch.get('bev_segmentation')
+                gt_bev = batch.get('bev_label')
+                if gt_bev is None:
+                    raise ValueError(
+                        "bev_segmentation_metrics requires 'bev_label' targets in the evaluation batch"
+                    )
 
-                # Placeholder implementation
-                # In production, compute:
-                # iou = self._compute_iou(bev_pred, gt_bev, num_classes)
-                # tp, fp, fn = self._compute_confusion_matrix(bev_pred, gt_bev)
-
-                # For now, return zeros
-                iou = np.zeros(num_classes)
+                pred_classes = torch.argmax(bev_pred, dim=1)
+                iou = self._compute_iou(pred_classes, gt_bev, num_classes)
+                tp, fp, fn = self._compute_confusion_matrix(pred_classes, gt_bev)
 
                 total_iou += iou
-                num_samples += 1
+                total_tp += tp
+                total_fp += fp
+                total_fn += fn
+                num_samples += pred_classes.size(0)
 
         # Compute mean metrics
         miou = np.mean(total_iou / num_samples) if num_samples > 0 else 0.0
@@ -144,7 +187,8 @@ class DownstreamEvaluator:
     def _compute_ade(
         self,
         pred: torch.Tensor,
-        gt: torch.Tensor
+        gt: torch.Tensor,
+        valid_mask: Optional[torch.Tensor] = None
     ) -> float:
         """
         Compute Average Displacement Error.
@@ -158,18 +202,27 @@ class DownstreamEvaluator:
         Returns:
             Average displacement error
         """
-        # L2 distance at each timestep
+        if pred.numel() == 0 or gt.numel() == 0:
+            return 0.0
+
         distances = torch.norm(pred - gt, dim=-1)  # (B, T)
 
-        # Average over time and batch
-        ade = torch.mean(distances)
+        if valid_mask is None:
+            return torch.mean(distances).item()
 
+        valid_mask = valid_mask.bool()
+        valid_count = valid_mask.sum()
+        if valid_count.item() == 0:
+            return 0.0
+
+        ade = distances.masked_select(valid_mask).mean()
         return ade.item()
 
     def _compute_fde(
         self,
         pred: torch.Tensor,
-        gt: torch.Tensor
+        gt: torch.Tensor,
+        valid_mask: Optional[torch.Tensor] = None
     ) -> float:
         """
         Compute Final Displacement Error.
@@ -183,13 +236,31 @@ class DownstreamEvaluator:
         Returns:
             Final displacement error
         """
-        # L2 distance at final timestep
-        final_distance = torch.norm(pred[:, -1] - gt[:, -1], dim=-1)  # (B,)
+        if pred.numel() == 0 or gt.numel() == 0:
+            return 0.0
 
-        # Average over batch
-        fde = torch.mean(final_distance)
+        if valid_mask is None:
+            final_distance = torch.norm(pred[:, -1] - gt[:, -1], dim=-1)
+            return torch.mean(final_distance).item()
 
-        return fde.item()
+        valid_mask = valid_mask.bool()
+        if valid_mask.ndim != 2:
+            raise ValueError("valid_mask must have shape (B, T)")
+
+        batch_errors = []
+        for batch_idx in range(pred.size(0)):
+            valid_steps = torch.nonzero(valid_mask[batch_idx], as_tuple=False).flatten()
+            if valid_steps.numel() == 0:
+                continue
+            final_idx = valid_steps[-1]
+            batch_errors.append(
+                torch.norm(pred[batch_idx, final_idx] - gt[batch_idx, final_idx])
+            )
+
+        if not batch_errors:
+            return 0.0
+
+        return torch.stack(batch_errors).mean().item()
 
     def _compute_iou(
         self,

@@ -9,6 +9,24 @@ class _DummyEvalModel:
         return self
 
 
+class _ConstantPredictionModel:
+    def __init__(self, trajectory, bev_logits):
+        self.trajectory = trajectory
+        self.bev_logits = bev_logits
+
+    def eval(self):
+        return self
+
+    def __call__(self, camera, lidar, radar, strategic, tactical, masks=None):
+        batch_size = camera.shape[0]
+        trajectory = self.trajectory[:batch_size].clone()
+        bev_logits = self.bev_logits[:batch_size].clone()
+        latent = torch.zeros(batch_size, 4)
+        log_var = torch.zeros(batch_size, 4)
+        motion = torch.zeros(batch_size, 6)
+        return latent, log_var, trajectory, motion, bev_logits
+
+
 class TestIntrinsicMetrics:
     """Test intrinsic evaluation metrics."""
 
@@ -152,6 +170,82 @@ class TestDownstreamMetrics:
         assert tp >= 0
         assert fp >= 0
         assert fn >= 0
+
+    def test_trajectory_metrics_uses_batch_targets(self):
+        from src.evaluation.downstream_metrics import DownstreamEvaluator
+
+        batch = {
+            "camera": torch.zeros(2, 3, 4, 4),
+            "lidar": torch.zeros(2, 8, 3),
+            "radar": torch.zeros(2, 1, 4, 4),
+            "strategic_action": torch.zeros(2, dtype=torch.long),
+            "tactical_action": torch.zeros(2, 3),
+            "trajectory_ego": torch.tensor(
+                [
+                    [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                    [[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]],
+                ],
+                dtype=torch.float32,
+            ),
+            "trajectory_valid_mask": torch.tensor(
+                [[True, True, True], [True, True, False]]
+            ),
+        }
+
+        trajectory_pred = torch.tensor(
+            [
+                [0.0, 0.0, 1.0, 0.0, 2.0, 0.0],
+                [0.0, 0.0, 2.0, 1.0, 9.0, 9.0],
+            ],
+            dtype=torch.float32,
+        )
+        bev_logits = torch.zeros(2, 2, 2, 2)
+
+        evaluator = DownstreamEvaluator(
+            _ConstantPredictionModel(trajectory_pred, bev_logits),
+            [batch],
+            "cpu",
+        )
+
+        metrics = evaluator.trajectory_metrics()
+
+        assert metrics["downstream/trajectory_ade"] == pytest.approx(0.2)
+        assert metrics["downstream/trajectory_fde"] == pytest.approx(0.5)
+        assert metrics["downstream/trajectory_min_ade"] == pytest.approx(0.2)
+        assert metrics["downstream/trajectory_min_fde"] == pytest.approx(0.5)
+
+    def test_bev_segmentation_metrics_uses_batch_targets(self):
+        from src.evaluation.downstream_metrics import DownstreamEvaluator
+
+        batch = {
+            "camera": torch.zeros(1, 3, 4, 4),
+            "lidar": torch.zeros(1, 8, 3),
+            "radar": torch.zeros(1, 1, 4, 4),
+            "strategic_action": torch.zeros(1, dtype=torch.long),
+            "tactical_action": torch.zeros(1, 3),
+            "bev_label": torch.tensor([[[0, 1], [1, 0]]], dtype=torch.long),
+        }
+
+        bev_logits = torch.tensor(
+            [[
+                [[4.0, 1.0], [1.0, 3.0]],
+                [[1.0, 4.0], [4.0, 1.0]],
+            ]],
+            dtype=torch.float32,
+        )
+        trajectory_pred = torch.zeros(1, 6)
+
+        evaluator = DownstreamEvaluator(
+            _ConstantPredictionModel(trajectory_pred, bev_logits),
+            [batch],
+            "cpu",
+        )
+
+        metrics = evaluator.bev_segmentation_metrics(num_classes=2)
+
+        assert metrics["downstream/bev_miou"] == pytest.approx(1.0)
+        assert metrics["downstream/bev_precision"] == pytest.approx(1.0)
+        assert metrics["downstream/bev_recall"] == pytest.approx(1.0)
 
 
 class TestMetricsEdgeCases:
