@@ -4,12 +4,14 @@ from torch.utils.data import DataLoader
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
+from pathlib import Path
 
 from src.models.himac_jepa import HiMACJEPA
 from src.data.dataset import MultiModalDrivingDataset, collate_fn
 from src.losses.predictive_loss import KLDivergenceLoss, NLLLoss
 from src.losses.vicreg_loss import VICRegLoss
 from src.masking.spatio_temporal_masking import SpatioTemporalMasking
+from src.training.checkpointing import save_training_checkpoints
 from src.training.masking import build_batch_masks
 from src.training.targets import build_ema_teacher, build_target_latent, update_ema_teacher
 
@@ -122,6 +124,10 @@ def main(cfg: DictConfig):
     print("Optimizer instantiated successfully.")
     print("EMA teacher instantiated and initialized.")
 
+    checkpoint_root = Path(cfg.training.get('checkpoint_dir', 'checkpoints'))
+    checkpoint_root.mkdir(parents=True, exist_ok=True)
+    best_total_loss = None
+
     # Training loop
     for epoch in range(cfg.training.epochs):
         running_total_loss = 0.0
@@ -229,6 +235,23 @@ def main(cfg: DictConfig):
         avg_predictive_loss = running_predictive_loss / len(dataloader)
         avg_vicreg_loss = running_vicreg_loss / len(dataloader)
         print(f"Epoch {epoch} Summary: Avg Total Loss: {avg_total_loss:.4f}, Avg Predictive Loss: {avg_predictive_loss:.4f}, Avg VICReg Loss: {avg_vicreg_loss:.4f}")
+
+        checkpoint_paths = save_training_checkpoints(
+            model=model,
+            optimizer=optimizer,
+            checkpoint_root=checkpoint_root,
+            experiment_name=cfg.get('experiment_name', 'himac-jepa'),
+            epoch=epoch,
+            avg_total_loss=avg_total_loss,
+            config=OmegaConf.to_container(cfg, resolve=True),
+            best_loss=best_total_loss,
+        )
+        if checkpoint_paths["saved_best"]:
+            best_total_loss = avg_total_loss
+
+        print(f"Saved latest checkpoint to {checkpoint_paths['latest_path']}")
+        if checkpoint_paths["saved_best"]:
+            print(f"Updated best checkpoint at {checkpoint_paths['best_path']}")
 
         # Log epoch summary to W&B
         if cfg.get('wandb', {}).get('enabled', False):

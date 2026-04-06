@@ -10,3 +10,6 @@ ema_decay: 0.999    # EMA decay rate
 
 # Masking
 use_masking: true
+
+# Checkpointing
+checkpoint_dir: checkpoints
