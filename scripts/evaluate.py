@@ -206,7 +206,7 @@ def evaluate(cfg: DictConfig):
     print("Saving Results")
     print("="*60)
 
-    results_dir = Path("evaluation_results")
+    results_dir = Path(cfg.evaluation.get('results_dir', 'evaluation_results'))
     results_dir.mkdir(exist_ok=True)
 
     experiment_name = cfg.get('experiment_name', 'default')

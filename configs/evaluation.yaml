@@ -1,5 +1,6 @@
 # Evaluation configuration for HiMAC-JEPA
 checkpoint_path: "${oc.env:CHECKPOINT_PATH,checkpoints/best_model.pth}"
+results_dir: "evaluation_results"
 
 # Intrinsic evaluation settings
 intrinsic:
