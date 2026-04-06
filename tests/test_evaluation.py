@@ -189,3 +189,49 @@ class TestMetricsEdgeCases:
 
         # Either NaN or raises warning
         assert isinstance(ade, float)
+
+
+class TestEvaluationBatching:
+    """Test evaluation-specific batch collation helpers."""
+
+    def test_collate_evaluation_batch_pads_trajectory_targets(self):
+        from src.evaluation.batching import collate_evaluation_batch
+
+        samples = [
+            {
+                "camera": torch.zeros(3, 4, 4),
+                "lidar": torch.zeros(8, 3),
+                "radar": torch.zeros(1, 4, 4),
+                "strategic_action": torch.tensor(1),
+                "tactical_action": torch.zeros(3),
+                "labels": {
+                    "trajectory_ego": {
+                        1.0: np.array([[1.0, 0.0], [2.0, 0.0]], dtype=np.float32),
+                        3.0: np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], dtype=np.float32),
+                    },
+                    "bev": np.ones((2, 2), dtype=np.uint8),
+                },
+            },
+            {
+                "camera": torch.ones(3, 4, 4),
+                "lidar": torch.ones(8, 3),
+                "radar": torch.ones(1, 4, 4),
+                "strategic_action": torch.tensor(2),
+                "tactical_action": torch.ones(3),
+                "labels": {
+                    "trajectory_ego": {
+                        1.0: np.array([[0.5, 0.5]], dtype=np.float32),
+                        3.0: np.array([[0.5, 0.5], [1.0, 1.0]], dtype=np.float32),
+                    },
+                    "bev": np.zeros((2, 2), dtype=np.uint8),
+                },
+            },
+        ]
+
+        batch = collate_evaluation_batch(samples)
+
+        assert batch["trajectory_ego"].shape == (2, 3, 2)
+        assert batch["trajectory_valid_mask"].shape == (2, 3)
+        assert torch.equal(batch["trajectory_valid_mask"][0], torch.tensor([True, True, True]))
+        assert torch.equal(batch["trajectory_valid_mask"][1], torch.tensor([True, True, False]))
+        assert batch["bev_label"].shape == (2, 2, 2)

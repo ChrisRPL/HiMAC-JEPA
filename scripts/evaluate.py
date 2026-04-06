@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.himac_jepa import HiMACJEPA
 from src.data.nuscenes_dataset import NuScenesMultiModalDataset
 from src.data.dataset import MultiModalDrivingDataset
+from src.evaluation.batching import collate_evaluation_batch
 from src.evaluation.intrinsic_metrics import IntrinsicEvaluator
 from src.evaluation.downstream_metrics import DownstreamEvaluator
 
@@ -98,9 +99,18 @@ def evaluate(cfg: DictConfig):
     print("Loading Dataset")
     print("="*60)
 
+    collate_fn = None
     if cfg.data.dataset == 'nuscenes':
         print("Using nuScenes dataset...")
-        val_dataset = NuScenesMultiModalDataset(cfg.data, split='val')
+        data_cfg = OmegaConf.create(OmegaConf.to_container(cfg.data, resolve=True))
+
+        if cfg.evaluation.downstream.enabled:
+            data_cfg.labels.enabled = True
+            data_cfg.labels.trajectory.include_agents = False
+            collate_fn = collate_evaluation_batch
+            print("Enabled label-backed evaluation targets for nuScenes benchmark")
+
+        val_dataset = NuScenesMultiModalDataset(data_cfg, split='val')
     else:
         print("Using dummy dataset...")
         dataset_config = {
@@ -118,7 +128,8 @@ def evaluate(cfg: DictConfig):
         val_dataset,
         batch_size=cfg.data.batch_size,
         shuffle=False,
-        num_workers=cfg.data.get('num_workers', 0)
+        num_workers=cfg.data.get('num_workers', 0),
+        collate_fn=collate_fn
     )
     print(f"Loaded {len(val_dataset)} validation samples")
 
