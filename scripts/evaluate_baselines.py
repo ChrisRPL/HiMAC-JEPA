@@ -1,20 +1,160 @@
 """Evaluation and comparison script for baseline models."""
 
 import argparse
-import os
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List, Tuple
 import torch
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
-import seaborn as sns
+from omegaconf import OmegaConf
+
+try:
+    import seaborn as sns
+    SEABORN_AVAILABLE = True
+except ImportError:
+    sns = None
+    SEABORN_AVAILABLE = False
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+from src.data.nuscenes_dataset import NuScenesMultiModalDataset
+from src.evaluation.batching import collate_evaluation_batch
+from src.evaluation.baseline_benchmark import (
+    collect_probe_targets,
+    compute_bev_classification_metrics,
+    compute_trajectory_horizon_metrics,
+    fit_ridge_probe,
+    move_batch_to_device,
+    predict_ridge_probe,
+)
+
+
+def build_benchmark_loaders(
+    data_root: str,
+    version: str,
+    batch_size: int,
+    num_workers: int,
+    cache_dir: str,
+) -> Tuple[DataLoader, DataLoader]:
+    """Build label-backed train/val dataloaders for benchmark evaluation."""
+    data_cfg = OmegaConf.load(project_root / "configs" / "data" / "nuscenes.yaml")
+    data_cfg.data_root = data_root
+    data_cfg.version = version
+    data_cfg.batch_size = batch_size
+    data_cfg.num_workers = num_workers
+    data_cfg.augmentation.enabled = False
+    data_cfg.labels.enabled = True
+    data_cfg.labels.trajectory.include_agents = False
+    data_cfg.labels.cache.cache_dir = cache_dir
+
+    train_dataset = NuScenesMultiModalDataset(data_cfg, split="train")
+    val_dataset = NuScenesMultiModalDataset(data_cfg, split="val")
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_evaluation_batch,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_evaluation_batch,
+    )
+
+    return train_loader, val_loader
+
+
+def load_himac_model(checkpoint_path: str, device: torch.device):
+    """Load a HiMAC-JEPA checkpoint without relying on BaselineModel APIs."""
+    from src.models.himac_jepa import HiMACJEPA
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    config = checkpoint.get("config")
+    if config is None:
+        raise ValueError("HiMAC-JEPA checkpoint must include the training config")
+
+    model = HiMACJEPA(config)
+
+    if "model_state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["model_state_dict"])
+    elif "state_dict" in checkpoint:
+        model.load_state_dict(checkpoint["state_dict"])
+    else:
+        model.load_state_dict(checkpoint)
+
+    model = model.to(device)
+    model.eval()
+    return model
+
+
+def get_model_num_parameters(model) -> int:
+    """Count trainable parameters for any PyTorch model."""
+    if hasattr(model, "get_num_parameters"):
+        return model.get_num_parameters()
+    return sum(param.numel() for param in model.parameters() if param.requires_grad)
+
+
+def get_model_size_mb(model) -> float:
+    """Estimate model size in megabytes."""
+    if hasattr(model, "get_model_size_mb"):
+        return model.get_model_size_mb()
+
+    param_size = sum(param.numel() * param.element_size() for param in model.parameters())
+    buffer_size = sum(buf.numel() * buf.element_size() for buf in model.buffers())
+    return (param_size + buffer_size) / (1024 ** 2)
+
+
+def measure_inference_time(
+    model_name: str,
+    model,
+    sample_batch: Dict[str, torch.Tensor],
+    device: torch.device,
+    num_iterations: int = 100,
+) -> float:
+    """Measure average inference latency."""
+    import time
+
+    sample_batch = move_batch_to_device(sample_batch, device)
+    model.eval()
+
+    def _forward():
+        if model_name == "himac_jepa":
+            return model(
+                sample_batch["camera"],
+                sample_batch["lidar"],
+                sample_batch["radar"],
+                sample_batch["strategic_action"],
+                sample_batch["tactical_action"],
+                masks=None,
+            )
+        return model(sample_batch)
+
+    with torch.no_grad():
+        for _ in range(10):
+            _forward()
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.time()
+
+    with torch.no_grad():
+        for _ in range(num_iterations):
+            _forward()
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    end = time.time()
+
+    return ((end - start) / num_iterations) * 1000
 
 
 def load_baseline_model(model_name: str, checkpoint_path: str, device: torch.device):
@@ -56,11 +196,9 @@ def load_baseline_model(model_name: str, checkpoint_path: str, device: torch.dev
         model = VJEPABaseline(checkpoint['config'])
 
     elif model_name == 'himac_jepa':
-        # Load HiMAC-JEPA model
-        from src.models.himac_jepa import HiMACJEPA
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        # Assume config is in checkpoint or load from default
-        model = HiMACJEPA(checkpoint.get('config', {}))
+        model = load_himac_model(checkpoint_path, device)
+        print(f"Loaded {model_name} from {checkpoint_path}")
+        return model
 
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -75,94 +213,110 @@ def load_baseline_model(model_name: str, checkpoint_path: str, device: torch.dev
     return model
 
 
-def evaluate_trajectory_prediction(
+def extract_probe_data(model, dataloader, device: torch.device):
+    """Extract baseline latents plus trajectory targets."""
+    latents = []
+    targets = []
+    valid_masks = []
+
+    model.eval()
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = move_batch_to_device(batch, device)
+            latent = model.get_latent(batch).detach().cpu()
+            trajectory, valid_mask = collect_probe_targets(batch)
+
+            latents.append(latent)
+            targets.append((trajectory * valid_mask.unsqueeze(-1)).cpu())
+            valid_masks.append(valid_mask.cpu())
+
+    return (
+        torch.cat(latents, dim=0),
+        torch.cat(targets, dim=0),
+        torch.cat(valid_masks, dim=0),
+    )
+
+
+def evaluate_trajectory_probe(
     model,
-    dataloader,
-    device: torch.device
+    train_loader,
+    val_loader,
+    device: torch.device,
+    probe_alpha: float = 1e-3,
 ) -> Dict[str, float]:
-    """
-    Evaluate trajectory prediction metrics.
+    """Evaluate baselines via a frozen-latent trajectory probe."""
+    print("Evaluating trajectory probe...")
 
-    Args:
-        model: Baseline model
-        dataloader: Test dataloader
-        device: Device
+    train_latents, train_targets, _ = extract_probe_data(model, train_loader, device)
+    val_latents, val_targets, val_valid_mask = extract_probe_data(model, val_loader, device)
 
-    Returns:
-        metrics: Dictionary with ADE, FDE for different horizons
-    """
-    print("Evaluating trajectory prediction...")
+    probe = fit_ridge_probe(
+        train_latents,
+        train_targets.view(train_targets.size(0), -1),
+        alpha=probe_alpha,
+    )
+    predictions = predict_ridge_probe(probe, val_latents).view_as(val_targets)
 
-    # Placeholder implementation
-    # In real implementation, extract latents and evaluate with trajectory head
-
-    metrics = {
-        'trajectory/ade_1s': np.random.uniform(0.5, 2.0),
-        'trajectory/ade_2s': np.random.uniform(1.0, 3.0),
-        'trajectory/ade_3s': np.random.uniform(1.5, 4.0),
-        'trajectory/fde_1s': np.random.uniform(0.8, 2.5),
-        'trajectory/fde_2s': np.random.uniform(1.5, 4.0),
-        'trajectory/fde_3s': np.random.uniform(2.0, 5.0),
-    }
-
-    return metrics
+    return compute_trajectory_horizon_metrics(
+        predictions,
+        val_targets,
+        val_valid_mask,
+    )
 
 
-def evaluate_bev_segmentation(
+def evaluate_himac_downstream(
     model,
-    dataloader,
-    device: torch.device
+    val_loader,
+    device: torch.device,
 ) -> Dict[str, float]:
-    """
-    Evaluate BEV segmentation metrics.
+    """Evaluate HiMAC-JEPA directly on trajectory and BEV outputs."""
+    print("Evaluating HiMAC-JEPA downstream heads...")
 
-    Args:
-        model: Baseline model
-        dataloader: Test dataloader
-        device: Device
+    trajectory_predictions = []
+    trajectory_targets = []
+    trajectory_masks = []
+    bev_predictions = []
+    bev_targets = []
 
-    Returns:
-        metrics: Dictionary with mIoU, accuracy, etc.
-    """
-    print("Evaluating BEV segmentation...")
+    model.eval()
+    with torch.no_grad():
+        for batch in val_loader:
+            batch = move_batch_to_device(batch, device)
 
-    # Placeholder implementation
+            _, _, trajectory_pred, _, bev_pred = model(
+                batch["camera"],
+                batch["lidar"],
+                batch["radar"],
+                batch["strategic_action"],
+                batch["tactical_action"],
+                masks=None,
+            )
 
-    metrics = {
-        'bev/miou': np.random.uniform(0.2, 0.7),
-        'bev/accuracy': np.random.uniform(0.5, 0.9),
-        'bev/drivable_iou': np.random.uniform(0.6, 0.9),
-        'bev/lane_iou': np.random.uniform(0.3, 0.7),
-    }
+            trajectory_target, trajectory_mask = collect_probe_targets(batch)
+            steps = min(trajectory_pred.size(-1) // 2, trajectory_target.size(1))
 
-    return metrics
+            trajectory_predictions.append(trajectory_pred.view(trajectory_pred.size(0), -1, 2)[:, :steps].cpu())
+            trajectory_targets.append(trajectory_target[:, :steps].cpu())
+            trajectory_masks.append(trajectory_mask[:, :steps].cpu())
 
+            if "bev_label" in batch:
+                bev_predictions.append(torch.argmax(bev_pred, dim=1).cpu())
+                bev_targets.append(batch["bev_label"].cpu())
 
-def evaluate_motion_prediction(
-    model,
-    dataloader,
-    device: torch.device
-) -> Dict[str, float]:
-    """
-    Evaluate motion prediction metrics.
+    metrics = compute_trajectory_horizon_metrics(
+        torch.cat(trajectory_predictions, dim=0),
+        torch.cat(trajectory_targets, dim=0),
+        torch.cat(trajectory_masks, dim=0),
+    )
 
-    Args:
-        model: Baseline model
-        dataloader: Test dataloader
-        device: Device
-
-    Returns:
-        metrics: Dictionary with mAP, ADE, etc.
-    """
-    print("Evaluating motion prediction...")
-
-    # Placeholder implementation
-
-    metrics = {
-        'motion/map': np.random.uniform(0.1, 0.5),
-        'motion/ade': np.random.uniform(1.0, 3.0),
-        'motion/fde': np.random.uniform(2.0, 5.0),
-    }
+    if bev_predictions:
+        metrics.update(
+            compute_bev_classification_metrics(
+                torch.cat(bev_predictions, dim=0),
+                torch.cat(bev_targets, dim=0),
+                num_classes=bev_pred.size(1),
+            )
+        )
 
     return metrics
 
@@ -170,7 +324,9 @@ def evaluate_motion_prediction(
 def evaluate_model(
     model_name: str,
     checkpoint_path: str,
-    dataloader,
+    train_loader,
+    val_loader,
+    sample_batch,
     device: torch.device
 ) -> Dict[str, float]:
     """
@@ -179,7 +335,9 @@ def evaluate_model(
     Args:
         model_name: Name of the model
         checkpoint_path: Path to checkpoint
-        dataloader: Test dataloader
+        train_loader: Train dataloader for probe fitting
+        val_loader: Validation dataloader for evaluation
+        sample_batch: Representative batch for inference timing
         device: Device
 
     Returns:
@@ -192,52 +350,22 @@ def evaluate_model(
     # Load model
     model = load_baseline_model(model_name, checkpoint_path, device)
 
-    # Evaluate on all tasks
     all_metrics = {}
 
-    # Trajectory prediction
-    traj_metrics = evaluate_trajectory_prediction(model, dataloader, device)
-    all_metrics.update(traj_metrics)
-
-    # BEV segmentation
-    bev_metrics = evaluate_bev_segmentation(model, dataloader, device)
-    all_metrics.update(bev_metrics)
-
-    # Motion prediction
-    motion_metrics = evaluate_motion_prediction(model, dataloader, device)
-    all_metrics.update(motion_metrics)
+    if model_name == 'himac_jepa':
+        all_metrics.update(evaluate_himac_downstream(model, val_loader, device))
+    else:
+        all_metrics.update(evaluate_trajectory_probe(model, train_loader, val_loader, device))
 
     # Model stats
-    all_metrics['model/num_parameters'] = model.get_num_parameters()
-    all_metrics['model/size_mb'] = model.get_model_size_mb()
+    all_metrics['model/num_parameters'] = get_model_num_parameters(model)
+    all_metrics['model/size_mb'] = get_model_size_mb(model)
 
     # Inference time
-    dummy_batch = create_dummy_batch(model_name, device)
-    inference_time = model.get_inference_time(dummy_batch, num_iterations=100)
+    inference_time = measure_inference_time(model_name, model, sample_batch, device, num_iterations=100)
     all_metrics['model/inference_time_ms'] = inference_time
 
     return all_metrics
-
-
-def create_dummy_batch(model_name: str, device: torch.device) -> Dict:
-    """Create dummy batch for inference timing."""
-    batch = {}
-
-    if model_name in ['camera_only', 'ijepa']:
-        batch['camera'] = torch.randn(1, 3, 224, 224, device=device)
-
-    elif model_name == 'lidar_only':
-        batch['lidar'] = torch.randn(1, 2048, 3, device=device)
-
-    elif model_name == 'radar_only':
-        batch['radar'] = torch.randn(1, 1, 128, 128, device=device)
-
-    elif model_name in ['vjepa', 'himac_jepa']:
-        batch['camera'] = torch.randn(1, 3, 224, 224, device=device)
-        batch['lidar'] = torch.randn(1, 2048, 3, device=device)
-        batch['radar'] = torch.randn(1, 1, 128, 128, device=device)
-
-    return batch
 
 
 def create_comparison_table(
@@ -256,8 +384,10 @@ def create_comparison_table(
     # Convert to DataFrame
     df = pd.DataFrame(results).T
 
-    # Sort by trajectory ADE (lower is better)
-    df = df.sort_values('trajectory/ade_3s')
+    # Sort by 3s trajectory ADE when available.
+    sort_metric = 'trajectory/ade_3s'
+    if sort_metric in df.columns and not df[sort_metric].dropna().empty:
+        df = df.sort_values(sort_metric)
 
     # Save as CSV
     csv_path = output_path / 'metrics.csv'
@@ -277,9 +407,12 @@ def create_comparison_table(
         f.write("\nBest Performers:\n")
         f.write("-" * 40 + "\n")
 
-        for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/map']:
-            if metric in df.columns:
+        for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/map', 'model/inference_time_ms']:
+            if metric in df.columns and not df[metric].dropna().empty:
                 if 'ade' in metric or 'fde' in metric:
+                    best_model = df[metric].idxmin()
+                    best_value = df[metric].min()
+                elif 'time' in metric:
                     best_model = df[metric].idxmin()
                     best_value = df[metric].min()
                 else:
@@ -307,9 +440,16 @@ def create_comparison_table(
             'model/inference_time_ms'
         ]
 
-        df_latex = df[key_metrics]
+        available_metrics = [
+            metric for metric in key_metrics
+            if metric in df.columns and not df[metric].dropna().empty
+        ]
 
-        f.write(df_latex.to_latex(float_format="%.3f"))
+        if available_metrics:
+            df_latex = df[available_metrics]
+            f.write(df_latex.to_latex(float_format="%.3f"))
+        else:
+            f.write("% No comparison metrics available yet.\n")
         f.write("\\end{table}\n")
 
     print(f"Saved LaTeX table: {tex_path}")
@@ -331,39 +471,46 @@ def create_comparison_plots(
     plots_dir = output_path / 'plots'
     plots_dir.mkdir(exist_ok=True)
 
-    # Set style
-    sns.set_style("whitegrid")
+    # Set style when seaborn is available, otherwise use matplotlib defaults.
+    if SEABORN_AVAILABLE:
+        sns.set_style("whitegrid")
 
     # Convert to DataFrame
     df = pd.DataFrame(results).T
 
     # Plot 1: Trajectory ADE comparison
     fig, ax = plt.subplots(figsize=(10, 6))
-    metrics = ['trajectory/ade_1s', 'trajectory/ade_2s', 'trajectory/ade_3s']
-    df[metrics].plot(kind='bar', ax=ax)
-    ax.set_ylabel('ADE (m)')
-    ax.set_title('Trajectory Prediction - Average Displacement Error')
-    ax.legend(['1s', '2s', '3s'])
-    plt.tight_layout()
-    plt.savefig(plots_dir / 'trajectory_ade.png', dpi=300)
+    metrics = [
+        metric for metric in ['trajectory/ade_1s', 'trajectory/ade_2s', 'trajectory/ade_3s']
+        if metric in df.columns and not df[metric].dropna().empty
+    ]
+    if metrics:
+        df[metrics].plot(kind='bar', ax=ax)
+        ax.set_ylabel('ADE (m)')
+        ax.set_title('Trajectory Prediction - Average Displacement Error')
+        ax.legend([metric.split('_')[-1] for metric in metrics])
+        plt.tight_layout()
+        plt.savefig(plots_dir / 'trajectory_ade.png', dpi=300)
     plt.close()
 
     # Plot 2: BEV segmentation
     fig, ax = plt.subplots(figsize=(10, 6))
-    df['bev/miou'].plot(kind='bar', ax=ax)
-    ax.set_ylabel('mIoU')
-    ax.set_title('BEV Segmentation - Mean IoU')
-    plt.tight_layout()
-    plt.savefig(plots_dir / 'bev_miou.png', dpi=300)
+    if 'bev/miou' in df.columns and not df['bev/miou'].dropna().empty:
+        df['bev/miou'].plot(kind='bar', ax=ax)
+        ax.set_ylabel('mIoU')
+        ax.set_title('BEV Segmentation - Mean IoU')
+        plt.tight_layout()
+        plt.savefig(plots_dir / 'bev_miou.png', dpi=300)
     plt.close()
 
     # Plot 3: Motion prediction
     fig, ax = plt.subplots(figsize=(10, 6))
-    df['motion/map'].plot(kind='bar', ax=ax)
-    ax.set_ylabel('mAP')
-    ax.set_title('Motion Prediction - Mean Average Precision')
-    plt.tight_layout()
-    plt.savefig(plots_dir / 'motion_map.png', dpi=300)
+    if 'motion/map' in df.columns and not df['motion/map'].dropna().empty:
+        df['motion/map'].plot(kind='bar', ax=ax)
+        ax.set_ylabel('mAP')
+        ax.set_title('Motion Prediction - Mean Average Precision')
+        plt.tight_layout()
+        plt.savefig(plots_dir / 'motion_map.png', dpi=300)
     plt.close()
 
     # Plot 4: Radar plot for overall comparison
@@ -371,7 +518,15 @@ def create_comparison_plots(
     ax = fig.add_subplot(111, projection='polar')
 
     # Normalize metrics to 0-1 for radar plot
-    metrics_for_radar = ['trajectory/ade_3s', 'bev/miou', 'motion/map', 'model/inference_time_ms']
+    metrics_for_radar = [
+        metric for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/map', 'model/inference_time_ms']
+        if metric in df.columns and not df[metric].dropna().empty
+    ]
+
+    if len(metrics_for_radar) < 2:
+        plt.close()
+        print("Skipping radar plot (not enough comparable metrics)")
+        return
 
     angles = np.linspace(0, 2 * np.pi, len(metrics_for_radar), endpoint=False).tolist()
     angles += angles[:1]
@@ -416,26 +571,16 @@ def run_statistical_tests(
     """
     print("\nRunning statistical tests...")
 
-    # Placeholder - in real implementation, use actual test sets
-    # and compute p-values with t-tests or Wilcoxon tests
-
     txt_path = output_path / 'statistical_tests.txt'
     with open(txt_path, 'w') as f:
         f.write("Statistical Significance Tests\n")
         f.write("=" * 60 + "\n\n")
-
-        f.write("Note: Placeholder results - requires actual test data\n\n")
-
-        f.write("Trajectory Prediction (ADE @ 3s):\n")
-        f.write("  HiMAC-JEPA vs V-JEPA: p < 0.01 **\n")
-        f.write("  HiMAC-JEPA vs I-JEPA: p < 0.001 ***\n")
-        f.write("  HiMAC-JEPA vs Camera-Only: p < 0.001 ***\n\n")
-
-        f.write("BEV Segmentation (mIoU):\n")
-        f.write("  HiMAC-JEPA vs V-JEPA: p < 0.05 *\n")
-        f.write("  HiMAC-JEPA vs Camera-Only: p < 0.001 ***\n\n")
-
-        f.write("Significance levels: * p < 0.05, ** p < 0.01, *** p < 0.001\n")
+        f.write("Statistical tests skipped.\n\n")
+        f.write(
+            "Reason: this script currently summarizes aggregate benchmark metrics, "
+            "but it does not yet persist paired per-sample outputs required for valid "
+            "significance testing.\n"
+        )
 
     print(f"Saved statistical tests: {txt_path}")
 
@@ -468,7 +613,35 @@ def main():
         '--data-dir',
         type=str,
         default='./data/nuscenes',
-        help='Path to dataset'
+        help='Path to nuScenes dataset root'
+    )
+
+    parser.add_argument(
+        '--version',
+        type=str,
+        default='v1.0-mini',
+        help='nuScenes version'
+    )
+
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        default=8,
+        help='Evaluation batch size'
+    )
+
+    parser.add_argument(
+        '--num-workers',
+        type=int,
+        default=4,
+        help='DataLoader workers'
+    )
+
+    parser.add_argument(
+        '--label-cache-dir',
+        type=str,
+        default='./cache/labels',
+        help='Directory for cached evaluation labels'
     )
 
     args = parser.parse_args()
@@ -484,18 +657,32 @@ def main():
     if len(args.checkpoints) != len(args.models):
         raise ValueError(f"Number of checkpoints ({len(args.checkpoints)}) must match number of models ({len(args.models)})")
 
-    # Create dataloader (placeholder)
-    print("\nNote: Using placeholder evaluation (dataloader not implemented)")
-    print("Implement actual dataloader for real evaluation\n")
+    # Create real label-backed dataloaders
+    print("\nBuilding nuScenes benchmark dataloaders...")
+    train_loader, val_loader = build_benchmark_loaders(
+        data_root=args.data_dir,
+        version=args.version,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        cache_dir=args.label_cache_dir,
+    )
+    print("Train and validation dataloaders ready")
 
-    dataloader = None  # Placeholder
+    sample_batch = next(iter(val_loader))
 
     # Evaluate all models
     all_results = {}
 
     for model_name, checkpoint_path in zip(args.models, args.checkpoints):
         try:
-            metrics = evaluate_model(model_name, checkpoint_path, dataloader, device)
+            metrics = evaluate_model(
+                model_name,
+                checkpoint_path,
+                train_loader,
+                val_loader,
+                sample_batch,
+                device,
+            )
             all_results[model_name] = metrics
 
             print(f"\nResults for {model_name}:")
