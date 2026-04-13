@@ -240,7 +240,8 @@ Current checked-in benchmark coverage:
 ### 2. BEV Segmentation
 - **Metrics**: mIoU, per-class IoU
 - **Higher is better**
-- **Current support**: direct evaluation for HiMAC-JEPA only
+- **Baselines**: frozen-latent decoder probe trained on the nuScenes train split
+- **HiMAC-JEPA**: direct BEV head evaluation on the validation split
 - Tests spatial understanding of scene
 
 ### 3. Motion Prediction
@@ -372,7 +373,7 @@ python scripts/evaluate_baselines.py \
 - `statistical_tests.txt`: Paired trajectory significance tests when at least two models have aligned per-sample trajectory errors
 
 **Current comparison contract:**
-- Baselines: trajectory probe metrics + model efficiency metrics
+- Baselines: trajectory probe metrics, BEV probe metrics, and model efficiency metrics
 - HiMAC-JEPA: direct trajectory metrics, direct BEV metrics, and model efficiency metrics
 - Trajectory significance tests: available from aligned per-sample validation errors
 - Motion metrics: intentionally skipped for now

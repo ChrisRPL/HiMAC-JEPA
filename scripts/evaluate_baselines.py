@@ -25,13 +25,16 @@ sys.path.insert(0, str(project_root))
 from src.data.nuscenes_dataset import NuScenesMultiModalDataset
 from src.evaluation.batching import collate_evaluation_batch
 from src.evaluation.baseline_benchmark import (
+    collect_bev_targets,
     collect_probe_targets,
     compute_bev_classification_metrics,
     compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
+    fit_bev_probe,
     fit_ridge_probe,
     move_batch_to_device,
     paired_sign_flip_test,
+    predict_bev_probe,
     predict_ridge_probe,
 )
 
@@ -216,10 +219,11 @@ def load_baseline_model(model_name: str, checkpoint_path: str, device: torch.dev
 
 
 def extract_probe_data(model, dataloader, device: torch.device):
-    """Extract baseline latents plus trajectory targets."""
+    """Extract baseline latents plus downstream targets."""
     latents = []
     targets = []
     valid_masks = []
+    bev_targets = []
 
     model.eval()
     with torch.no_grad():
@@ -231,49 +235,97 @@ def extract_probe_data(model, dataloader, device: torch.device):
             latents.append(latent)
             targets.append((trajectory * valid_mask.unsqueeze(-1)).cpu())
             valid_masks.append(valid_mask.cpu())
+            if "bev_label" in batch:
+                bev_targets.append(collect_bev_targets(batch).cpu())
 
-    return (
-        torch.cat(latents, dim=0),
-        torch.cat(targets, dim=0),
-        torch.cat(valid_masks, dim=0),
-    )
+    probe_data = {
+        "latents": torch.cat(latents, dim=0),
+        "trajectory_targets": torch.cat(targets, dim=0),
+        "trajectory_valid_mask": torch.cat(valid_masks, dim=0),
+    }
+    if bev_targets:
+        probe_data["bev_targets"] = torch.cat(bev_targets, dim=0)
+
+    return probe_data
 
 
 def evaluate_trajectory_probe(
-    model,
-    train_loader,
-    val_loader,
-    device: torch.device,
+    train_probe_data,
+    val_probe_data,
     probe_alpha: float = 1e-3,
 ) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """Evaluate baselines via a frozen-latent trajectory probe."""
     print("Evaluating trajectory probe...")
 
-    train_latents, train_targets, _ = extract_probe_data(model, train_loader, device)
-    val_latents, val_targets, val_valid_mask = extract_probe_data(model, val_loader, device)
-
     probe = fit_ridge_probe(
-        train_latents,
-        train_targets.view(train_targets.size(0), -1),
+        train_probe_data["latents"],
+        train_probe_data["trajectory_targets"].view(train_probe_data["trajectory_targets"].size(0), -1),
         alpha=probe_alpha,
     )
-    predictions = predict_ridge_probe(probe, val_latents).view_as(val_targets)
+    predictions = predict_ridge_probe(probe, val_probe_data["latents"]).view_as(
+        val_probe_data["trajectory_targets"]
+    )
 
     metrics = compute_trajectory_horizon_metrics(
         predictions,
-        val_targets,
-        val_valid_mask,
+        val_probe_data["trajectory_targets"],
+        val_probe_data["trajectory_valid_mask"],
     )
     per_sample_metrics = compute_trajectory_horizon_errors(
         predictions,
-        val_targets,
-        val_valid_mask,
+        val_probe_data["trajectory_targets"],
+        val_probe_data["trajectory_valid_mask"],
     )
 
     return metrics, {
         metric_name: values.cpu().numpy()
         for metric_name, values in per_sample_metrics.items()
     }
+
+
+def evaluate_bev_probe(
+    train_probe_data,
+    val_probe_data,
+    device: torch.device,
+    probe_epochs: int = 5,
+    probe_batch_size: int = 16,
+    probe_learning_rate: float = 1e-3,
+) -> Dict[str, float]:
+    """Evaluate baselines on BEV segmentation via a frozen-latent decoder probe."""
+    if "bev_targets" not in train_probe_data or "bev_targets" not in val_probe_data:
+        return {}
+
+    print("Evaluating BEV probe...")
+
+    train_bev = train_probe_data["bev_targets"]
+    val_bev = val_probe_data["bev_targets"]
+    bev_h, bev_w = train_bev.shape[-2:]
+    num_classes = int(
+        max(
+            train_bev.max().item(),
+            val_bev.max().item(),
+        )
+    ) + 1
+
+    probe = fit_bev_probe(
+        train_latents=train_probe_data["latents"],
+        train_labels=train_bev,
+        latent_dim=train_probe_data["latents"].size(1),
+        num_classes=num_classes,
+        bev_h=bev_h,
+        bev_w=bev_w,
+        device=device,
+        epochs=probe_epochs,
+        batch_size=probe_batch_size,
+        learning_rate=probe_learning_rate,
+    )
+    predictions = predict_bev_probe(
+        probe,
+        val_probe_data["latents"],
+        device=device,
+        batch_size=probe_batch_size,
+    )
+    return compute_bev_classification_metrics(predictions, val_bev, num_classes=num_classes)
 
 
 def evaluate_himac_downstream(
@@ -351,7 +403,10 @@ def evaluate_model(
     train_loader,
     val_loader,
     sample_batch,
-    device: torch.device
+    device: torch.device,
+    bev_probe_epochs: int = 5,
+    bev_probe_batch_size: int = 16,
+    bev_probe_learning_rate: float = 1e-3,
 ) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """
     Evaluate a single baseline model on all tasks.
@@ -380,11 +435,21 @@ def evaluate_model(
     if model_name == 'himac_jepa':
         task_metrics, per_sample_metrics = evaluate_himac_downstream(model, val_loader, device)
     else:
+        train_probe_data = extract_probe_data(model, train_loader, device)
+        val_probe_data = extract_probe_data(model, val_loader, device)
         task_metrics, per_sample_metrics = evaluate_trajectory_probe(
-            model,
-            train_loader,
-            val_loader,
-            device,
+            train_probe_data,
+            val_probe_data,
+        )
+        task_metrics.update(
+            evaluate_bev_probe(
+                train_probe_data,
+                val_probe_data,
+                device=device,
+                probe_epochs=bev_probe_epochs,
+                probe_batch_size=bev_probe_batch_size,
+                probe_learning_rate=bev_probe_learning_rate,
+            )
         )
 
     all_metrics.update(task_metrics)
@@ -750,6 +815,24 @@ def main():
         default='./cache/labels',
         help='Directory for cached evaluation labels'
     )
+    parser.add_argument(
+        '--bev-probe-epochs',
+        type=int,
+        default=5,
+        help='Number of epochs for frozen-latent BEV probe fitting'
+    )
+    parser.add_argument(
+        '--bev-probe-batch-size',
+        type=int,
+        default=16,
+        help='Batch size for frozen-latent BEV probe fitting'
+    )
+    parser.add_argument(
+        '--bev-probe-lr',
+        type=float,
+        default=1e-3,
+        help='Learning rate for frozen-latent BEV probe fitting'
+    )
 
     args = parser.parse_args()
 
@@ -790,6 +873,9 @@ def main():
                 val_loader,
                 sample_batch,
                 device,
+                bev_probe_epochs=args.bev_probe_epochs,
+                bev_probe_batch_size=args.bev_probe_batch_size,
+                bev_probe_learning_rate=args.bev_probe_lr,
             )
             all_results[model_name] = metrics
             per_sample_results[model_name] = model_per_sample_metrics

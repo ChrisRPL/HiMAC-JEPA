@@ -1,12 +1,15 @@
 import torch
 
 from src.evaluation.baseline_benchmark import (
+    collect_bev_targets,
     collect_probe_targets,
     compute_bev_classification_metrics,
     compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
+    fit_bev_probe,
     fit_ridge_probe,
     paired_sign_flip_test,
+    predict_bev_probe,
     predict_ridge_probe,
 )
 
@@ -104,6 +107,16 @@ def test_collect_probe_targets_reads_collated_fields():
     assert valid_mask.shape == (2, 6)
 
 
+def test_collect_bev_targets_reads_collated_field():
+    batch = {
+        "bev_label": torch.zeros(2, 8, 8, dtype=torch.long),
+    }
+
+    targets = collect_bev_targets(batch)
+
+    assert targets.shape == (2, 8, 8)
+
+
 def test_compute_bev_classification_metrics():
     predictions = torch.tensor([[[0, 1], [1, 0]]])
     targets = torch.tensor([[[0, 1], [1, 0]]])
@@ -113,6 +126,32 @@ def test_compute_bev_classification_metrics():
     assert metrics["bev/miou"] == 1.0
     assert metrics["bev/precision"] == 1.0
     assert metrics["bev/recall"] == 1.0
+
+
+def test_bev_probe_predicts_segmentation_shape():
+    train_latents = torch.randn(4, 8)
+    train_labels = torch.randint(0, 2, (4, 8, 8), dtype=torch.long)
+
+    probe = fit_bev_probe(
+        train_latents=train_latents,
+        train_labels=train_labels,
+        latent_dim=8,
+        num_classes=2,
+        bev_h=8,
+        bev_w=8,
+        device=torch.device("cpu"),
+        epochs=1,
+        batch_size=2,
+        learning_rate=1e-3,
+    )
+    predictions = predict_bev_probe(
+        probe,
+        train_latents,
+        device=torch.device("cpu"),
+        batch_size=2,
+    )
+
+    assert predictions.shape == (4, 8, 8)
 
 
 def test_paired_sign_flip_test_detects_nonzero_delta():

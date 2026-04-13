@@ -19,13 +19,14 @@ The architecture consists of several key components:
 5.  **Uncertainty Quantification**: Explicitly outputs distribution parameters ($\mu, \sigma$) to quantify prediction confidence.
 
 ## Current Status (April 2026)
-- Core training scaffold is stable and regression-tested. Current branch tip passed `pytest -q` with **208 passed, 66 skipped**.
+- Core training scaffold is stable and regression-tested. Current branch tip passed `pytest -q` with **211 passed, 66 skipped**.
 - The active JEPA path now includes:
   - spatio-temporal masking across camera, radar, and temporal context
   - an **observation-only EMA teacher** for target latents
   - action-conditioned online prediction with guards against masked-context leakage
 - The benchmark path now includes:
   - label-backed trajectory evaluation for all compared models
+  - frozen-latent BEV probe evaluation for baselines
   - direct trajectory and BEV evaluation for HiMAC-JEPA
   - aligned per-sample trajectory errors plus paired trajectory significance tests
 - The repo is ready for controlled research iterations on objective design and temporal prediction.

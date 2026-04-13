@@ -5,6 +5,8 @@ from typing import Dict, Iterable, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
 
 
 def fit_ridge_probe(
@@ -201,6 +203,14 @@ def collect_probe_targets(batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor,
     return batch["trajectory_ego"], batch["trajectory_valid_mask"]
 
 
+def collect_bev_targets(batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+    """Extract BEV segmentation targets from a collated evaluation batch."""
+    if "bev_label" not in batch:
+        raise ValueError("batch must contain bev_label")
+
+    return batch["bev_label"]
+
+
 def move_batch_to_device(batch: Dict, device: torch.device) -> Dict:
     """Move a flat tensor batch to the target device."""
     return {
@@ -249,3 +259,65 @@ def compute_bev_classification_metrics(
         "bev/precision": precision,
         "bev/recall": recall,
     }
+
+
+def fit_bev_probe(
+    train_latents: torch.Tensor,
+    train_labels: torch.Tensor,
+    latent_dim: int,
+    num_classes: int,
+    bev_h: int,
+    bev_w: int,
+    device: torch.device,
+    epochs: int = 5,
+    batch_size: int = 16,
+    learning_rate: float = 1e-3,
+):
+    """Fit a lightweight BEV segmentation probe on frozen latents."""
+    from src.models.bev_semantic_segmentation_head import BEVSemanticSegmentationHead
+
+    probe = BEVSemanticSegmentationHead(
+        latent_dim=latent_dim,
+        bev_h=bev_h,
+        bev_w=bev_w,
+        num_classes=num_classes,
+    ).to(device)
+    optimizer = torch.optim.Adam(probe.parameters(), lr=learning_rate)
+
+    dataset = TensorDataset(train_latents.float(), train_labels.long())
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    probe.train()
+    for _ in range(epochs):
+        for latents, labels in loader:
+            latents = latents.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            logits = probe(latents)
+            loss = F.cross_entropy(logits, labels)
+            loss.backward()
+            optimizer.step()
+
+    probe.eval()
+    return probe
+
+
+def predict_bev_probe(
+    probe,
+    latents: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 16,
+) -> torch.Tensor:
+    """Run a fitted BEV probe over frozen latents."""
+    dataset = TensorDataset(latents.float())
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    predictions = []
+
+    probe.eval()
+    with torch.no_grad():
+        for (batch_latents,) in loader:
+            logits = probe(batch_latents.to(device))
+            predictions.append(torch.argmax(logits, dim=1).cpu())
+
+    return torch.cat(predictions, dim=0)

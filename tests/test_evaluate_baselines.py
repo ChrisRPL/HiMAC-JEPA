@@ -1,8 +1,10 @@
 from pathlib import Path
+import torch
 
 from scripts.evaluate_baselines import (
     create_comparison_plots,
     create_comparison_table,
+    evaluate_bev_probe,
     run_statistical_tests,
 )
 
@@ -84,3 +86,25 @@ def test_statistical_tests_report_paired_trajectory_results(tmp_path):
     contents = (tmp_path / "statistical_tests.txt").read_text()
     assert "paired sign-flip permutation test" in contents.lower()
     assert "himac_jepa vs camera_only" in contents
+
+
+def test_evaluate_bev_probe_returns_metrics():
+    train_probe_data = {
+        "latents": torch.randn(4, 8),
+        "bev_targets": torch.randint(0, 2, (4, 8, 8), dtype=torch.long),
+    }
+    val_probe_data = {
+        "latents": torch.randn(2, 8),
+        "bev_targets": torch.randint(0, 2, (2, 8, 8), dtype=torch.long),
+    }
+
+    metrics = evaluate_bev_probe(
+        train_probe_data,
+        val_probe_data,
+        device=torch.device("cpu"),
+        probe_epochs=1,
+        probe_batch_size=2,
+        probe_learning_rate=1e-3,
+    )
+
+    assert set(metrics) == {"bev/miou", "bev/precision", "bev/recall"}
