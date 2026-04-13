@@ -8,6 +8,7 @@ from src.evaluation.baseline_benchmark import (
     collect_motion_targets,
     collect_probe_targets,
     compute_bev_classification_metrics,
+    compute_motion_errors,
     compute_motion_metrics,
     compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
@@ -217,6 +218,45 @@ def test_compute_motion_metrics_respects_valid_masks():
 
     assert metrics["motion/ade"] == pytest.approx(0.2)
     assert metrics["motion/fde"] == pytest.approx(0.5)
+
+
+def test_compute_motion_errors_returns_per_sample_vectors():
+    predictions = torch.tensor(
+        [
+            [
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                [[0.0, 1.0], [0.0, 3.0], [9.0, 9.0]],
+            ],
+            [
+                [[0.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            ],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                [[0.0, 1.0], [0.0, 2.0], [0.0, 0.0]],
+            ],
+            [
+                [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+            ],
+        ]
+    )
+    valid_mask = torch.tensor(
+        [
+            [[True, True, True], [True, True, False]],
+            [[True, True, True], [False, False, False]],
+        ]
+    )
+    agent_mask = torch.tensor([[True, True], [True, False]])
+
+    errors = compute_motion_errors(predictions, targets, valid_mask, agent_mask)
+
+    assert torch.allclose(errors["motion/ade"], torch.tensor([0.2, 2.0 / 3.0]))
+    assert torch.allclose(errors["motion/fde"], torch.tensor([0.5, 1.0]))
 
 
 def test_align_motion_targets_reshapes_flat_predictions():

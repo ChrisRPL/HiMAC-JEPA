@@ -248,7 +248,7 @@ Current checked-in benchmark coverage:
 - **Metrics**: ADE, FDE over the shared fixed-width closest-agent contract
 - **Baselines**: frozen-latent ridge probe trained on the nuScenes train split
 - **HiMAC-JEPA**: direct motion head evaluation on the validation split
-- **Current limitation**: paired significance testing is still trajectory-only
+- **Current limitation**: paired significance testing is available for motion ADE/FDE, but not for BEV yet
 
 ### 4. Model Efficiency
 - **Number of parameters**
@@ -368,28 +368,28 @@ python scripts/evaluate_baselines.py \
 
 **Outputs:**
 - `metrics.csv`: Raw metrics for all models
-- `per_sample_metrics.csv`: Aligned per-sample trajectory errors used for paired tests
+- `per_sample_metrics.csv`: Aligned per-sample trajectory and motion errors used for paired tests
 - `comparison_table.txt`: Human-readable comparison table
 - `comparison_table.tex`: LaTeX table for papers
 - `plots/*.png`: Comparison plots for metrics that are actually available
-- `statistical_tests.txt`: Paired trajectory significance tests when at least two models have aligned per-sample trajectory errors
+- `statistical_tests.txt`: Paired trajectory and motion significance tests when aligned per-sample errors are available
 
 **Current comparison contract:**
 - Baselines: trajectory probe metrics, BEV probe metrics, motion probe metrics, and model efficiency metrics
 - HiMAC-JEPA: direct trajectory metrics, direct motion metrics, direct BEV metrics, and model efficiency metrics
 - Trajectory significance tests: available from aligned per-sample validation errors
-- Motion significance tests: not implemented yet
+- Motion significance tests: available from aligned per-sample validation errors
 
 ---
 
 ## Statistical Significance
 
-The checked-in comparison script now runs **paired trajectory significance tests** when at least two evaluated models share aligned per-sample trajectory errors.
+The checked-in comparison script now runs **paired trajectory and motion significance tests** when at least two evaluated models share aligned per-sample errors.
 
 Current method:
 - paired sign-flip permutation test
 - inputs: per-sample validation ADE/FDE vectors from the same sample order
-- comparison style: best aggregate model vs the rest for each reported trajectory horizon
+- comparison style: best aggregate model vs the rest for each reported trajectory or motion metric
 
 Still missing:
 - BEV significance testing

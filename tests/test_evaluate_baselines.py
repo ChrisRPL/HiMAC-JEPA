@@ -33,10 +33,12 @@ def test_comparison_artifacts_handle_missing_metrics(tmp_path):
         "camera_only": {
             "trajectory/ade_3s": [1.4, 1.6, 1.5],
             "trajectory/fde_3s": [2.1, 2.4, 2.3],
+            "motion/ade": [1.2, 1.1, 1.3],
         },
         "himac_jepa": {
             "trajectory/ade_3s": [1.0, 1.1, 1.2],
             "trajectory/fde_3s": [1.6, 1.8, 1.7],
+            "motion/ade": [0.8, 0.9, 0.7],
         },
     }
 
@@ -91,6 +93,23 @@ def test_statistical_tests_report_paired_trajectory_results(tmp_path):
     assert "himac_jepa vs camera_only" in contents
 
 
+def test_statistical_tests_report_motion_results_when_available(tmp_path):
+    results = {
+        "camera_only": {"motion/ade": 1.2},
+        "himac_jepa": {"motion/ade": 0.8},
+    }
+    per_sample_metrics = {
+        "camera_only": {"motion/ade": [1.3, 1.1, 1.2]},
+        "himac_jepa": {"motion/ade": [0.9, 0.8, 0.7]},
+    }
+
+    run_statistical_tests(results, per_sample_metrics, tmp_path)
+
+    contents = (tmp_path / "statistical_tests.txt").read_text()
+    assert "motion/ade" in contents
+    assert "himac_jepa vs camera_only" in contents
+
+
 def test_evaluate_bev_probe_returns_metrics():
     train_probe_data = {
         "latents": torch.randn(4, 8),
@@ -129,10 +148,11 @@ def test_evaluate_motion_probe_returns_metrics():
         "motion_agent_mask": torch.tensor([[True, True], [True, False]]),
     }
 
-    metrics = evaluate_motion_probe(
+    metrics, per_sample_metrics = evaluate_motion_probe(
         train_probe_data,
         val_probe_data,
         max_agents=2,
     )
 
     assert set(metrics) == {"motion/ade", "motion/fde"}
+    assert set(per_sample_metrics) == {"motion/ade", "motion/fde"}

@@ -30,6 +30,7 @@ from src.evaluation.baseline_benchmark import (
     collect_motion_targets,
     collect_probe_targets,
     compute_bev_classification_metrics,
+    compute_motion_errors,
     compute_motion_metrics,
     compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
@@ -360,11 +361,11 @@ def evaluate_motion_probe(
     val_probe_data,
     max_agents: int,
     probe_alpha: float = 1e-3,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """Evaluate baselines on motion forecasting via a frozen-latent ridge probe."""
     required_keys = {"motion_targets", "motion_valid_mask", "motion_agent_mask"}
     if not required_keys.issubset(train_probe_data) or not required_keys.issubset(val_probe_data):
-        return {}
+        return {}, {}
 
     print("Evaluating motion probe...")
 
@@ -388,12 +389,23 @@ def evaluate_motion_probe(
     )
     predictions = predict_ridge_probe(probe, val_probe_data["latents"]).view_as(val_targets)
 
-    return compute_motion_metrics(
+    metrics = compute_motion_metrics(
         predictions,
         val_targets,
         val_valid_mask,
         val_agent_mask,
     )
+    per_sample_metrics = compute_motion_errors(
+        predictions,
+        val_targets,
+        val_valid_mask,
+        val_agent_mask,
+    )
+
+    return metrics, {
+        metric_name: values.cpu().numpy()
+        for metric_name, values in per_sample_metrics.items()
+    }
 
 
 def evaluate_himac_downstream(
@@ -468,13 +480,29 @@ def evaluate_himac_downstream(
     )
 
     if motion_predictions:
+        motion_predictions_tensor = torch.cat(motion_predictions, dim=0)
+        motion_targets_tensor = torch.cat(motion_targets, dim=0)
+        motion_valid_masks_tensor = torch.cat(motion_valid_masks, dim=0)
+        motion_agent_masks_tensor = torch.cat(motion_agent_masks, dim=0)
+
         metrics.update(
             compute_motion_metrics(
-                torch.cat(motion_predictions, dim=0),
-                torch.cat(motion_targets, dim=0),
-                torch.cat(motion_valid_masks, dim=0),
-                torch.cat(motion_agent_masks, dim=0),
+                motion_predictions_tensor,
+                motion_targets_tensor,
+                motion_valid_masks_tensor,
+                motion_agent_masks_tensor,
             )
+        )
+        per_sample_metrics.update(
+            {
+                metric_name: values
+                for metric_name, values in compute_motion_errors(
+                    motion_predictions_tensor,
+                    motion_targets_tensor,
+                    motion_valid_masks_tensor,
+                    motion_agent_masks_tensor,
+                ).items()
+            }
         )
 
     if bev_predictions:
@@ -550,13 +578,13 @@ def evaluate_model(
         if motion_probe_agents is None and "motion_targets" in train_probe_data:
             motion_probe_agents = infer_motion_probe_agents(train_probe_data["motion_targets"].size(2))
         if motion_probe_agents is not None:
-            task_metrics.update(
-                evaluate_motion_probe(
-                    train_probe_data,
-                    val_probe_data,
-                    max_agents=motion_probe_agents,
-                )
+            motion_metrics, motion_per_sample_metrics = evaluate_motion_probe(
+                train_probe_data,
+                val_probe_data,
+                max_agents=motion_probe_agents,
             )
+            task_metrics.update(motion_metrics)
+            per_sample_metrics.update(motion_per_sample_metrics)
 
     all_metrics.update(task_metrics)
 
@@ -813,7 +841,14 @@ def run_statistical_tests(
         f.write("Interpretation: lower is better; a negative mean delta means the first model has lower error.\n\n")
 
         wrote_results = False
-        for metric in ['trajectory/ade_3s', 'trajectory/fde_3s', 'trajectory/ade_2s', 'trajectory/fde_2s']:
+        for metric in [
+            'trajectory/ade_3s',
+            'trajectory/fde_3s',
+            'trajectory/ade_2s',
+            'trajectory/fde_2s',
+            'motion/ade',
+            'motion/fde',
+        ]:
             available_models = [
                 model_name
                 for model_name in results

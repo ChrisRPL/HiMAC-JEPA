@@ -338,6 +338,30 @@ def compute_motion_metrics(
     agent_mask: torch.Tensor,
 ) -> Dict[str, float]:
     """Compute multi-agent motion ADE/FDE over the aligned closest-agent contract."""
+    per_sample_errors = compute_motion_errors(
+        predictions,
+        targets,
+        valid_mask,
+        agent_mask,
+    )
+
+    metrics = {}
+    for metric_name, values in per_sample_errors.items():
+        finite_values = values[torch.isfinite(values)]
+        metrics[metric_name] = (
+            finite_values.mean().item() if finite_values.numel() > 0 else float("nan")
+        )
+
+    return metrics
+
+
+def compute_motion_errors(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    valid_mask: torch.Tensor,
+    agent_mask: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """Compute per-sample motion ADE/FDE over the aligned closest-agent contract."""
     predictions, targets, valid_mask, agent_mask = align_motion_targets(
         predictions,
         targets,
@@ -346,26 +370,32 @@ def compute_motion_metrics(
     )
 
     if predictions.numel() == 0 or targets.numel() == 0:
-        return {"motion/ade": float("nan"), "motion/fde": float("nan")}
+        nan_values = torch.full((predictions.size(0),), float("nan"))
+        return {"motion/ade": nan_values, "motion/fde": nan_values.clone()}
 
     distances = torch.norm(predictions - targets, dim=-1)
     valid_mask = valid_mask & agent_mask.unsqueeze(-1)
 
-    valid_count = valid_mask.sum()
-    ade = distances.masked_select(valid_mask).mean().item() if valid_count.item() > 0 else float("nan")
+    ade = torch.full((predictions.size(0),), float("nan"), dtype=distances.dtype)
+    fde = torch.full((predictions.size(0),), float("nan"), dtype=distances.dtype)
 
-    final_errors = []
     for batch_idx in range(predictions.size(0)):
+        sample_final_errors = []
+        sample_valid_mask = valid_mask[batch_idx]
+        if sample_valid_mask.any():
+            ade[batch_idx] = distances[batch_idx].masked_select(sample_valid_mask).mean()
+
         for agent_idx in range(predictions.size(1)):
             if not agent_mask[batch_idx, agent_idx]:
                 continue
             agent_valid = torch.nonzero(valid_mask[batch_idx, agent_idx], as_tuple=False).flatten()
             if agent_valid.numel() == 0:
                 continue
-            final_idx = agent_valid[-1]
-            final_errors.append(distances[batch_idx, agent_idx, final_idx])
+            sample_final_errors.append(distances[batch_idx, agent_idx, agent_valid[-1]])
 
-    fde = torch.stack(final_errors).mean().item() if final_errors else float("nan")
+        if sample_final_errors:
+            fde[batch_idx] = torch.stack(sample_final_errors).mean()
+
     return {"motion/ade": ade, "motion/fde": fde}
 
 
