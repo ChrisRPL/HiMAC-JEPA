@@ -25,11 +25,15 @@ sys.path.insert(0, str(project_root))
 from src.data.nuscenes_dataset import NuScenesMultiModalDataset
 from src.evaluation.batching import collate_evaluation_batch
 from src.evaluation.baseline_benchmark import (
+    align_motion_targets,
     collect_bev_targets,
+    collect_motion_targets,
     collect_probe_targets,
     compute_bev_classification_metrics,
+    compute_motion_metrics,
     compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
+    build_motion_probe_targets,
     fit_bev_probe,
     fit_ridge_probe,
     move_batch_to_device,
@@ -99,6 +103,17 @@ def load_himac_model(checkpoint_path: str, device: torch.device):
     model = model.to(device)
     model.eval()
     return model
+
+
+def infer_motion_probe_agents(num_steps: int) -> int:
+    """Infer the shared fixed-width motion contract from the HiMAC head config."""
+    root_cfg = OmegaConf.load(project_root / "configs" / "config.yaml")
+    output_dim = int(root_cfg.motion_prediction_head.output_dim)
+    if num_steps <= 0 or output_dim % (num_steps * 2) != 0:
+        raise ValueError(
+            f"motion_prediction_head.output_dim={output_dim} is incompatible with num_steps={num_steps}"
+        )
+    return output_dim // (num_steps * 2)
 
 
 def get_model_num_parameters(model) -> int:
@@ -224,6 +239,9 @@ def extract_probe_data(model, dataloader, device: torch.device):
     targets = []
     valid_masks = []
     bev_targets = []
+    motion_targets = []
+    motion_valid_masks = []
+    motion_agent_masks = []
 
     model.eval()
     with torch.no_grad():
@@ -237,6 +255,11 @@ def extract_probe_data(model, dataloader, device: torch.device):
             valid_masks.append(valid_mask.cpu())
             if "bev_label" in batch:
                 bev_targets.append(collect_bev_targets(batch).cpu())
+            if "motion_future_trajectories" in batch:
+                motion_target, motion_valid_mask, motion_agent_mask = collect_motion_targets(batch)
+                motion_targets.append(motion_target.cpu())
+                motion_valid_masks.append(motion_valid_mask.cpu())
+                motion_agent_masks.append(motion_agent_mask.cpu())
 
     probe_data = {
         "latents": torch.cat(latents, dim=0),
@@ -245,6 +268,10 @@ def extract_probe_data(model, dataloader, device: torch.device):
     }
     if bev_targets:
         probe_data["bev_targets"] = torch.cat(bev_targets, dim=0)
+    if motion_targets:
+        probe_data["motion_targets"] = torch.cat(motion_targets, dim=0)
+        probe_data["motion_valid_mask"] = torch.cat(motion_valid_masks, dim=0)
+        probe_data["motion_agent_mask"] = torch.cat(motion_agent_masks, dim=0)
 
     return probe_data
 
@@ -328,17 +355,62 @@ def evaluate_bev_probe(
     return compute_bev_classification_metrics(predictions, val_bev, num_classes=num_classes)
 
 
+def evaluate_motion_probe(
+    train_probe_data,
+    val_probe_data,
+    max_agents: int,
+    probe_alpha: float = 1e-3,
+) -> Dict[str, float]:
+    """Evaluate baselines on motion forecasting via a frozen-latent ridge probe."""
+    required_keys = {"motion_targets", "motion_valid_mask", "motion_agent_mask"}
+    if not required_keys.issubset(train_probe_data) or not required_keys.issubset(val_probe_data):
+        return {}
+
+    print("Evaluating motion probe...")
+
+    train_targets, train_valid_mask, train_agent_mask = build_motion_probe_targets(
+        train_probe_data["motion_targets"],
+        train_probe_data["motion_valid_mask"],
+        train_probe_data["motion_agent_mask"],
+        max_agents=max_agents,
+    )
+    val_targets, val_valid_mask, val_agent_mask = build_motion_probe_targets(
+        val_probe_data["motion_targets"],
+        val_probe_data["motion_valid_mask"],
+        val_probe_data["motion_agent_mask"],
+        max_agents=max_agents,
+    )
+
+    probe = fit_ridge_probe(
+        train_probe_data["latents"],
+        train_targets.view(train_targets.size(0), -1),
+        alpha=probe_alpha,
+    )
+    predictions = predict_ridge_probe(probe, val_probe_data["latents"]).view_as(val_targets)
+
+    return compute_motion_metrics(
+        predictions,
+        val_targets,
+        val_valid_mask,
+        val_agent_mask,
+    )
+
+
 def evaluate_himac_downstream(
     model,
     val_loader,
     device: torch.device,
 ) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
-    """Evaluate HiMAC-JEPA directly on trajectory and BEV outputs."""
+    """Evaluate HiMAC-JEPA directly on trajectory, motion, and BEV outputs."""
     print("Evaluating HiMAC-JEPA downstream heads...")
 
     trajectory_predictions = []
     trajectory_targets = []
     trajectory_masks = []
+    motion_predictions = []
+    motion_targets = []
+    motion_valid_masks = []
+    motion_agent_masks = []
     bev_predictions = []
     bev_targets = []
 
@@ -347,7 +419,7 @@ def evaluate_himac_downstream(
         for batch in val_loader:
             batch = move_batch_to_device(batch, device)
 
-            _, _, trajectory_pred, _, bev_pred = model(
+            _, _, trajectory_pred, motion_pred, bev_pred = model(
                 batch["camera"],
                 batch["lidar"],
                 batch["radar"],
@@ -362,6 +434,19 @@ def evaluate_himac_downstream(
             trajectory_predictions.append(trajectory_pred.view(trajectory_pred.size(0), -1, 2)[:, :steps].cpu())
             trajectory_targets.append(trajectory_target[:, :steps].cpu())
             trajectory_masks.append(trajectory_mask[:, :steps].cpu())
+
+            if "motion_future_trajectories" in batch:
+                motion_target, motion_valid_mask, motion_agent_mask = collect_motion_targets(batch)
+                aligned_motion_pred, aligned_motion_target, aligned_motion_valid_mask, aligned_motion_agent_mask = align_motion_targets(
+                    motion_pred.cpu(),
+                    motion_target.cpu(),
+                    motion_valid_mask.cpu(),
+                    motion_agent_mask.cpu(),
+                )
+                motion_predictions.append(aligned_motion_pred)
+                motion_targets.append(aligned_motion_target)
+                motion_valid_masks.append(aligned_motion_valid_mask)
+                motion_agent_masks.append(aligned_motion_agent_mask)
 
             if "bev_label" in batch:
                 bev_predictions.append(torch.argmax(bev_pred, dim=1).cpu())
@@ -381,6 +466,16 @@ def evaluate_himac_downstream(
         trajectory_targets_tensor,
         trajectory_masks_tensor,
     )
+
+    if motion_predictions:
+        metrics.update(
+            compute_motion_metrics(
+                torch.cat(motion_predictions, dim=0),
+                torch.cat(motion_targets, dim=0),
+                torch.cat(motion_valid_masks, dim=0),
+                torch.cat(motion_agent_masks, dim=0),
+            )
+        )
 
     if bev_predictions:
         metrics.update(
@@ -407,6 +502,7 @@ def evaluate_model(
     bev_probe_epochs: int = 5,
     bev_probe_batch_size: int = 16,
     bev_probe_learning_rate: float = 1e-3,
+    motion_probe_agents: int | None = None,
 ) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """
     Evaluate a single baseline model on all tasks.
@@ -451,6 +547,16 @@ def evaluate_model(
                 probe_learning_rate=bev_probe_learning_rate,
             )
         )
+        if motion_probe_agents is None and "motion_targets" in train_probe_data:
+            motion_probe_agents = infer_motion_probe_agents(train_probe_data["motion_targets"].size(2))
+        if motion_probe_agents is not None:
+            task_metrics.update(
+                evaluate_motion_probe(
+                    train_probe_data,
+                    val_probe_data,
+                    max_agents=motion_probe_agents,
+                )
+            )
 
     all_metrics.update(task_metrics)
 
@@ -533,7 +639,7 @@ def create_comparison_table(
         f.write("\nBest Performers:\n")
         f.write("-" * 40 + "\n")
 
-        for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/map', 'model/inference_time_ms']:
+        for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/ade', 'model/inference_time_ms']:
             if metric in df.columns and not df[metric].dropna().empty:
                 if 'ade' in metric or 'fde' in metric:
                     best_model = df[metric].idxmin()
@@ -562,7 +668,7 @@ def create_comparison_table(
             'trajectory/ade_3s',
             'trajectory/fde_3s',
             'bev/miou',
-            'motion/map',
+            'motion/ade',
             'model/inference_time_ms'
         ]
 
@@ -631,12 +737,12 @@ def create_comparison_plots(
 
     # Plot 3: Motion prediction
     fig, ax = plt.subplots(figsize=(10, 6))
-    if 'motion/map' in df.columns and not df['motion/map'].dropna().empty:
-        df['motion/map'].plot(kind='bar', ax=ax)
-        ax.set_ylabel('mAP')
-        ax.set_title('Motion Prediction - Mean Average Precision')
+    if 'motion/ade' in df.columns and not df['motion/ade'].dropna().empty:
+        df['motion/ade'].plot(kind='bar', ax=ax)
+        ax.set_ylabel('ADE (m)')
+        ax.set_title('Motion Prediction - Average Displacement Error')
         plt.tight_layout()
-        plt.savefig(plots_dir / 'motion_map.png', dpi=300)
+        plt.savefig(plots_dir / 'motion_ade.png', dpi=300)
     plt.close()
 
     # Plot 4: Radar plot for overall comparison
@@ -645,7 +751,7 @@ def create_comparison_plots(
 
     # Normalize metrics to 0-1 for radar plot
     metrics_for_radar = [
-        metric for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/map', 'model/inference_time_ms']
+        metric for metric in ['trajectory/ade_3s', 'bev/miou', 'motion/ade', 'model/inference_time_ms']
         if metric in df.columns and not df[metric].dropna().empty
     ]
 
@@ -833,6 +939,12 @@ def main():
         default=1e-3,
         help='Learning rate for frozen-latent BEV probe fitting'
     )
+    parser.add_argument(
+        '--motion-probe-agents',
+        type=int,
+        default=None,
+        help='Number of closest agents used for the shared fixed-width motion probe contract'
+    )
 
     args = parser.parse_args()
 
@@ -876,6 +988,7 @@ def main():
                 bev_probe_epochs=args.bev_probe_epochs,
                 bev_probe_batch_size=args.bev_probe_batch_size,
                 bev_probe_learning_rate=args.bev_probe_lr,
+                motion_probe_agents=args.motion_probe_agents,
             )
             all_results[model_name] = metrics
             per_sample_results[model_name] = model_per_sample_metrics

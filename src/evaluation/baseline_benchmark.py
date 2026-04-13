@@ -211,6 +211,21 @@ def collect_bev_targets(batch: Dict[str, torch.Tensor]) -> torch.Tensor:
     return batch["bev_label"]
 
 
+def collect_motion_targets(
+    batch: Dict[str, torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Extract motion targets from a collated evaluation batch."""
+    required_keys = ("motion_future_trajectories", "motion_valid_mask", "motion_agent_mask")
+    if any(key not in batch for key in required_keys):
+        raise ValueError("batch must contain collated motion targets")
+
+    return (
+        batch["motion_future_trajectories"],
+        batch["motion_valid_mask"],
+        batch["motion_agent_mask"],
+    )
+
+
 def move_batch_to_device(batch: Dict, device: torch.device) -> Dict:
     """Move a flat tensor batch to the target device."""
     return {
@@ -259,6 +274,99 @@ def compute_bev_classification_metrics(
         "bev/precision": precision,
         "bev/recall": recall,
     }
+
+
+def align_motion_targets(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    valid_mask: torch.Tensor,
+    agent_mask: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Align fixed-width motion predictions with padded closest-agent labels."""
+    target = target.float()
+    valid_mask = valid_mask.bool()
+    agent_mask = agent_mask.bool()
+
+    if target.dim() != 4 or valid_mask.dim() != 3 or agent_mask.dim() != 2:
+        raise ValueError("motion tensors must have shapes (B, A, T, 2), (B, A, T), (B, A)")
+
+    if prediction.dim() == 2:
+        num_steps = target.size(2)
+        if prediction.size(-1) % (num_steps * 2) != 0:
+            raise ValueError(
+                f"Unexpected motion prediction shape {tuple(prediction.shape)} for {num_steps} steps"
+            )
+        num_agents = prediction.size(-1) // (num_steps * 2)
+        prediction = prediction.view(prediction.size(0), num_agents, num_steps, 2)
+    elif prediction.dim() != 4:
+        raise ValueError(f"Unexpected motion prediction shape: {tuple(prediction.shape)}")
+
+    max_agents = min(prediction.size(1), target.size(1))
+    max_steps = min(prediction.size(2), target.size(2))
+
+    return (
+        prediction[:, :max_agents, :max_steps],
+        target[:, :max_agents, :max_steps],
+        valid_mask[:, :max_agents, :max_steps],
+        agent_mask[:, :max_agents],
+    )
+
+
+def build_motion_probe_targets(
+    future_trajectories: torch.Tensor,
+    valid_mask: torch.Tensor,
+    agent_mask: torch.Tensor,
+    max_agents: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Trim padded motion labels to the shared fixed-width benchmark contract."""
+    if max_agents <= 0:
+        raise ValueError("max_agents must be positive")
+
+    max_agents = min(max_agents, future_trajectories.size(1))
+    aligned_targets = future_trajectories[:, :max_agents].float()
+    aligned_valid_mask = valid_mask[:, :max_agents].bool()
+    aligned_agent_mask = agent_mask[:, :max_agents].bool()
+
+    masked_targets = aligned_targets * aligned_valid_mask.unsqueeze(-1).float()
+    return masked_targets, aligned_valid_mask, aligned_agent_mask
+
+
+def compute_motion_metrics(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    valid_mask: torch.Tensor,
+    agent_mask: torch.Tensor,
+) -> Dict[str, float]:
+    """Compute multi-agent motion ADE/FDE over the aligned closest-agent contract."""
+    predictions, targets, valid_mask, agent_mask = align_motion_targets(
+        predictions,
+        targets,
+        valid_mask,
+        agent_mask,
+    )
+
+    if predictions.numel() == 0 or targets.numel() == 0:
+        return {"motion/ade": float("nan"), "motion/fde": float("nan")}
+
+    distances = torch.norm(predictions - targets, dim=-1)
+    valid_mask = valid_mask & agent_mask.unsqueeze(-1)
+
+    valid_count = valid_mask.sum()
+    ade = distances.masked_select(valid_mask).mean().item() if valid_count.item() > 0 else float("nan")
+
+    final_errors = []
+    for batch_idx in range(predictions.size(0)):
+        for agent_idx in range(predictions.size(1)):
+            if not agent_mask[batch_idx, agent_idx]:
+                continue
+            agent_valid = torch.nonzero(valid_mask[batch_idx, agent_idx], as_tuple=False).flatten()
+            if agent_valid.numel() == 0:
+                continue
+            final_idx = agent_valid[-1]
+            final_errors.append(distances[batch_idx, agent_idx, final_idx])
+
+    fde = torch.stack(final_errors).mean().item() if final_errors else float("nan")
+    return {"motion/ade": ade, "motion/fde": fde}
 
 
 def fit_bev_probe(

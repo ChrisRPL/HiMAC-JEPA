@@ -5,6 +5,7 @@ from scripts.evaluate_baselines import (
     create_comparison_plots,
     create_comparison_table,
     evaluate_bev_probe,
+    evaluate_motion_probe,
     run_statistical_tests,
 )
 
@@ -24,6 +25,7 @@ def test_comparison_artifacts_handle_missing_metrics(tmp_path):
             "trajectory/ade_3s": 1.1,
             "trajectory/fde_3s": 1.7,
             "bev/miou": 0.42,
+            "motion/ade": 0.8,
             "model/inference_time_ms": 8.5,
         },
     }
@@ -49,6 +51,7 @@ def test_comparison_artifacts_handle_missing_metrics(tmp_path):
     assert (tmp_path / "statistical_tests.txt").exists()
     assert (tmp_path / "plots" / "trajectory_ade.png").exists()
     assert (tmp_path / "plots" / "bev_miou.png").exists()
+    assert (tmp_path / "plots" / "motion_ade.png").exists()
 
 
 def test_statistical_tests_file_is_honest(tmp_path):
@@ -108,3 +111,28 @@ def test_evaluate_bev_probe_returns_metrics():
     )
 
     assert set(metrics) == {"bev/miou", "bev/precision", "bev/recall"}
+
+
+def test_evaluate_motion_probe_returns_metrics():
+    train_probe_data = {
+        "latents": torch.randn(4, 8),
+        "motion_targets": torch.randn(4, 2, 3, 2),
+        "motion_valid_mask": torch.ones(4, 2, 3, dtype=torch.bool),
+        "motion_agent_mask": torch.tensor(
+            [[True, True], [True, False], [True, True], [True, False]]
+        ),
+    }
+    val_probe_data = {
+        "latents": torch.randn(2, 8),
+        "motion_targets": torch.randn(2, 2, 3, 2),
+        "motion_valid_mask": torch.ones(2, 2, 3, dtype=torch.bool),
+        "motion_agent_mask": torch.tensor([[True, True], [True, False]]),
+    }
+
+    metrics = evaluate_motion_probe(
+        train_probe_data,
+        val_probe_data,
+        max_agents=2,
+    )
+
+    assert set(metrics) == {"motion/ade", "motion/fde"}

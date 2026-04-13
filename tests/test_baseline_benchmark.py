@@ -1,9 +1,14 @@
+import pytest
 import torch
 
 from src.evaluation.baseline_benchmark import (
+    align_motion_targets,
+    build_motion_probe_targets,
     collect_bev_targets,
+    collect_motion_targets,
     collect_probe_targets,
     compute_bev_classification_metrics,
+    compute_motion_metrics,
     compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
     fit_bev_probe,
@@ -117,6 +122,20 @@ def test_collect_bev_targets_reads_collated_field():
     assert targets.shape == (2, 8, 8)
 
 
+def test_collect_motion_targets_reads_collated_fields():
+    batch = {
+        "motion_future_trajectories": torch.zeros(2, 3, 4, 2),
+        "motion_valid_mask": torch.ones(2, 3, 4, dtype=torch.bool),
+        "motion_agent_mask": torch.tensor([[True, True, False], [True, False, False]]),
+    }
+
+    trajectories, valid_mask, agent_mask = collect_motion_targets(batch)
+
+    assert trajectories.shape == (2, 3, 4, 2)
+    assert valid_mask.shape == (2, 3, 4)
+    assert agent_mask.shape == (2, 3)
+
+
 def test_compute_bev_classification_metrics():
     predictions = torch.tensor([[[0, 1], [1, 0]]])
     targets = torch.tensor([[[0, 1], [1, 0]]])
@@ -152,6 +171,71 @@ def test_bev_probe_predicts_segmentation_shape():
     )
 
     assert predictions.shape == (4, 8, 8)
+
+
+def test_build_motion_probe_targets_trims_to_shared_agent_budget():
+    future = torch.arange(2 * 3 * 2 * 2, dtype=torch.float32).view(2, 3, 2, 2)
+    valid = torch.tensor(
+        [
+            [[True, True], [True, False], [False, False]],
+            [[True, True], [True, True], [True, False]],
+        ]
+    )
+    agent_mask = torch.tensor([[True, True, False], [True, False, False]])
+
+    targets, valid_mask, aligned_agents = build_motion_probe_targets(
+        future,
+        valid,
+        agent_mask,
+        max_agents=2,
+    )
+
+    assert targets.shape == (2, 2, 2, 2)
+    assert valid_mask.shape == (2, 2, 2)
+    assert aligned_agents.shape == (2, 2)
+    assert torch.equal(aligned_agents[0], torch.tensor([True, True]))
+    assert torch.equal(aligned_agents[1], torch.tensor([True, False]))
+
+
+def test_compute_motion_metrics_respects_valid_masks():
+    predictions = torch.tensor(
+        [[
+            [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+            [[0.0, 1.0], [0.0, 3.0], [9.0, 9.0]],
+        ]]
+    )
+    targets = torch.tensor(
+        [[
+            [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+            [[0.0, 1.0], [0.0, 2.0], [0.0, 0.0]],
+        ]]
+    )
+    valid_mask = torch.tensor([[[True, True, True], [True, True, False]]])
+    agent_mask = torch.tensor([[True, True]])
+
+    metrics = compute_motion_metrics(predictions, targets, valid_mask, agent_mask)
+
+    assert metrics["motion/ade"] == pytest.approx(0.2)
+    assert metrics["motion/fde"] == pytest.approx(0.5)
+
+
+def test_align_motion_targets_reshapes_flat_predictions():
+    prediction = torch.arange(12, dtype=torch.float32).view(1, 12)
+    target = torch.zeros(1, 1, 3, 2)
+    valid_mask = torch.ones(1, 1, 3, dtype=torch.bool)
+    agent_mask = torch.ones(1, 1, dtype=torch.bool)
+
+    aligned_prediction, aligned_target, aligned_valid_mask, aligned_agent_mask = align_motion_targets(
+        prediction,
+        target,
+        valid_mask,
+        agent_mask,
+    )
+
+    assert aligned_prediction.shape == (1, 1, 3, 2)
+    assert aligned_target.shape == (1, 1, 3, 2)
+    assert torch.equal(aligned_valid_mask, valid_mask)
+    assert torch.equal(aligned_agent_mask, agent_mask)
 
 
 def test_paired_sign_flip_test_detects_nonzero_delta():

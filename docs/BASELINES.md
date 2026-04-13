@@ -245,9 +245,10 @@ Current checked-in benchmark coverage:
 - Tests spatial understanding of scene
 
 ### 3. Motion Prediction
-- **Direct HiMAC evaluation**: motion ADE/FDE is now reported for the fixed-width motion head
-- **Baseline status**: not reported by the checked-in comparison script yet
-- Reason: the fixed-width motion head and frozen-probe baselines still need a shared agent-selection contract before a fair cross-model comparison
+- **Metrics**: ADE, FDE over the shared fixed-width closest-agent contract
+- **Baselines**: frozen-latent ridge probe trained on the nuScenes train split
+- **HiMAC-JEPA**: direct motion head evaluation on the validation split
+- **Current limitation**: paired significance testing is still trajectory-only
 
 ### 4. Model Efficiency
 - **Number of parameters**
@@ -280,14 +281,14 @@ LiDAR-Only:  ~0.35 (good geometry, poor semantics)
 Radar-Only:  ~0.20 (worst - very sparse)
 ```
 
-### Motion Prediction (mAP) ↑
+### Motion Prediction (ADE ↓)
 ```
-HiMAC-JEPA:  ~0.45 (best)
-V-JEPA:      ~0.40
-LiDAR-Only:  ~0.35 (good for detection)
-I-JEPA:      ~0.32
-Camera-Only: ~0.30
-Radar-Only:  ~0.15 (worst)
+HiMAC-JEPA:  ~1.0m  (best)
+V-JEPA:      ~1.2m
+LiDAR-Only:  ~1.4m
+I-JEPA:      ~1.5m
+Camera-Only: ~1.6m
+Radar-Only:  ~2.0m  (worst)
 ```
 
 ### Inference Time (ms) ↓
@@ -374,10 +375,10 @@ python scripts/evaluate_baselines.py \
 - `statistical_tests.txt`: Paired trajectory significance tests when at least two models have aligned per-sample trajectory errors
 
 **Current comparison contract:**
-- Baselines: trajectory probe metrics, BEV probe metrics, and model efficiency metrics
-- HiMAC-JEPA: direct trajectory metrics, direct BEV metrics, and model efficiency metrics
+- Baselines: trajectory probe metrics, BEV probe metrics, motion probe metrics, and model efficiency metrics
+- HiMAC-JEPA: direct trajectory metrics, direct motion metrics, direct BEV metrics, and model efficiency metrics
 - Trajectory significance tests: available from aligned per-sample validation errors
-- Motion metrics: intentionally skipped for now
+- Motion significance tests: not implemented yet
 
 ---
 
