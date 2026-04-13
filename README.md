@@ -19,14 +19,18 @@ The architecture consists of several key components:
 5.  **Uncertainty Quantification**: Explicitly outputs distribution parameters ($\mu, \sigma$) to quantify prediction confidence.
 
 ## Current Status (April 2026)
-- Core training scaffold is stable and regression-tested. Current merge tip passed `pytest -q` with **190 passed, 66 skipped**.
+- Core training scaffold is stable and regression-tested. Current branch tip passed `pytest -q` with **208 passed, 66 skipped**.
 - The active JEPA path now includes:
   - spatio-temporal masking across camera, radar, and temporal context
   - an **observation-only EMA teacher** for target latents
   - action-conditioned online prediction with guards against masked-context leakage
+- The benchmark path now includes:
+  - label-backed trajectory evaluation for all compared models
+  - direct trajectory and BEV evaluation for HiMAC-JEPA
+  - aligned per-sample trajectory errors plus paired trajectory significance tests
 - The repo is ready for controlled research iterations on objective design and temporal prediction.
 - The repo is **not benchmark-complete yet**:
-  - some downstream evaluation metrics still use placeholder logic
+  - motion evaluation is still partial
   - temporal-consistency evaluation is still scaffolded
   - action extraction still includes heuristic / placeholder components
   - no benchmark table on real nuScenes runs is checked into the repo yet
@@ -378,7 +382,7 @@ Cache statistics:
 
 HiMAC-JEPA includes 5 baseline models for comprehensive comparison:
 
-**Status note:** baseline training scripts and report formatting are implemented, and the checked-in comparison path is now label-backed for trajectory evaluation. HiMAC-JEPA is scored directly on trajectory and BEV heads where labels exist. Motion metrics and statistical significance tests are still intentionally skipped until the evaluator persists paired per-sample outputs.
+**Status note:** baseline training scripts and report formatting are implemented, and the checked-in comparison path is now label-backed for trajectory evaluation. HiMAC-JEPA is scored directly on trajectory and BEV heads where labels exist. The evaluator also logs aligned per-sample trajectory errors and runs paired trajectory significance tests when at least two models are compared. Motion metrics are still intentionally skipped.
 
 **Single-Modal Baselines:**
 1. **Camera-Only**: ResNet18 + LSTM, supervised future frame prediction
@@ -435,7 +439,8 @@ python scripts/evaluate_baselines.py \
 # - results/baselines/comparison_table.txt    (human-readable)
 # - results/baselines/comparison_table.tex    (LaTeX for papers)
 # - results/baselines/plots/*.png             (plots for available metrics)
-# - results/baselines/statistical_tests.txt   (explicit skip note until paired outputs are logged)
+# - results/baselines/per_sample_metrics.csv  (aligned per-sample trajectory errors)
+# - results/baselines/statistical_tests.txt   (paired trajectory significance tests, when available)
 ```
 
 **Research Hypothesis: Expected Performance Hierarchy** (not benchmarked yet):
@@ -515,7 +520,7 @@ python train.py data=nuscenes wandb.enabled=true
 - Label extraction and caching pipeline
 
 **Implemented, but still needs honest benchmark validation**
-- Downstream evaluation metrics: trajectory and BEV benchmark paths are label-backed; motion/significance evaluation is still partial
+- Downstream evaluation metrics: trajectory and BEV benchmark paths are label-backed; motion evaluation is still partial
 - Temporal-consistency metric: scaffolded, not yet backed by sequential evaluation
 - nuScenes action extraction: tactical/strategic labels still include heuristic or placeholder logic
 - Baseline comparisons: honest evaluation loop exists, but no checked-in real benchmark table yet

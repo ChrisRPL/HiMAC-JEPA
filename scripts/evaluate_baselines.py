@@ -27,9 +27,11 @@ from src.evaluation.batching import collate_evaluation_batch
 from src.evaluation.baseline_benchmark import (
     collect_probe_targets,
     compute_bev_classification_metrics,
+    compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
     fit_ridge_probe,
     move_batch_to_device,
+    paired_sign_flip_test,
     predict_ridge_probe,
 )
 
@@ -243,7 +245,7 @@ def evaluate_trajectory_probe(
     val_loader,
     device: torch.device,
     probe_alpha: float = 1e-3,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """Evaluate baselines via a frozen-latent trajectory probe."""
     print("Evaluating trajectory probe...")
 
@@ -257,18 +259,28 @@ def evaluate_trajectory_probe(
     )
     predictions = predict_ridge_probe(probe, val_latents).view_as(val_targets)
 
-    return compute_trajectory_horizon_metrics(
+    metrics = compute_trajectory_horizon_metrics(
         predictions,
         val_targets,
         val_valid_mask,
     )
+    per_sample_metrics = compute_trajectory_horizon_errors(
+        predictions,
+        val_targets,
+        val_valid_mask,
+    )
+
+    return metrics, {
+        metric_name: values.cpu().numpy()
+        for metric_name, values in per_sample_metrics.items()
+    }
 
 
 def evaluate_himac_downstream(
     model,
     val_loader,
     device: torch.device,
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """Evaluate HiMAC-JEPA directly on trajectory and BEV outputs."""
     print("Evaluating HiMAC-JEPA downstream heads...")
 
@@ -303,10 +315,19 @@ def evaluate_himac_downstream(
                 bev_predictions.append(torch.argmax(bev_pred, dim=1).cpu())
                 bev_targets.append(batch["bev_label"].cpu())
 
+    trajectory_predictions_tensor = torch.cat(trajectory_predictions, dim=0)
+    trajectory_targets_tensor = torch.cat(trajectory_targets, dim=0)
+    trajectory_masks_tensor = torch.cat(trajectory_masks, dim=0)
+
     metrics = compute_trajectory_horizon_metrics(
-        torch.cat(trajectory_predictions, dim=0),
-        torch.cat(trajectory_targets, dim=0),
-        torch.cat(trajectory_masks, dim=0),
+        trajectory_predictions_tensor,
+        trajectory_targets_tensor,
+        trajectory_masks_tensor,
+    )
+    per_sample_metrics = compute_trajectory_horizon_errors(
+        trajectory_predictions_tensor,
+        trajectory_targets_tensor,
+        trajectory_masks_tensor,
     )
 
     if bev_predictions:
@@ -318,7 +339,10 @@ def evaluate_himac_downstream(
             )
         )
 
-    return metrics
+    return metrics, {
+        metric_name: values.cpu().numpy()
+        for metric_name, values in per_sample_metrics.items()
+    }
 
 
 def evaluate_model(
@@ -328,7 +352,7 @@ def evaluate_model(
     val_loader,
     sample_batch,
     device: torch.device
-) -> Dict[str, float]:
+) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
     """
     Evaluate a single baseline model on all tasks.
 
@@ -341,7 +365,8 @@ def evaluate_model(
         device: Device
 
     Returns:
-        metrics: Dictionary of all metrics
+        metrics: Dictionary of aggregate metrics
+        per_sample_metrics: Dictionary of aligned per-sample metrics
     """
     print(f"\n{'=' * 60}")
     print(f"Evaluating: {model_name}")
@@ -353,9 +378,16 @@ def evaluate_model(
     all_metrics = {}
 
     if model_name == 'himac_jepa':
-        all_metrics.update(evaluate_himac_downstream(model, val_loader, device))
+        task_metrics, per_sample_metrics = evaluate_himac_downstream(model, val_loader, device)
     else:
-        all_metrics.update(evaluate_trajectory_probe(model, train_loader, val_loader, device))
+        task_metrics, per_sample_metrics = evaluate_trajectory_probe(
+            model,
+            train_loader,
+            val_loader,
+            device,
+        )
+
+    all_metrics.update(task_metrics)
 
     # Model stats
     all_metrics['model/num_parameters'] = get_model_num_parameters(model)
@@ -365,7 +397,36 @@ def evaluate_model(
     inference_time = measure_inference_time(model_name, model, sample_batch, device, num_iterations=100)
     all_metrics['model/inference_time_ms'] = inference_time
 
-    return all_metrics
+    return all_metrics, per_sample_metrics
+
+
+def save_per_sample_metrics(
+    per_sample_results: Dict[str, Dict[str, np.ndarray]],
+    output_path: Path,
+):
+    """Persist aligned per-sample metrics for downstream analysis."""
+    csv_path = output_path / 'per_sample_metrics.csv'
+    rows = []
+
+    for model_name, metric_map in per_sample_results.items():
+        for metric_name, values in metric_map.items():
+            for sample_index, value in enumerate(np.asarray(values).tolist()):
+                if np.isnan(value):
+                    continue
+                rows.append(
+                    {
+                        'model': model_name,
+                        'metric': metric_name,
+                        'sample_index': sample_index,
+                        'value': value,
+                    }
+                )
+
+    pd.DataFrame(rows, columns=['model', 'metric', 'sample_index', 'value']).to_csv(
+        csv_path,
+        index=False,
+    )
+    print(f"Saved per-sample metrics: {csv_path}")
 
 
 def create_comparison_table(
@@ -560,6 +621,7 @@ def create_comparison_plots(
 
 def run_statistical_tests(
     results: Dict[str, Dict[str, float]],
+    per_sample_results: Dict[str, Dict[str, np.ndarray]],
     output_path: Path
 ):
     """
@@ -570,17 +632,62 @@ def run_statistical_tests(
         output_path: Path to save results
     """
     print("\nRunning statistical tests...")
+    save_per_sample_metrics(per_sample_results, output_path)
 
     txt_path = output_path / 'statistical_tests.txt'
     with open(txt_path, 'w') as f:
         f.write("Statistical Significance Tests\n")
         f.write("=" * 60 + "\n\n")
-        f.write("Statistical tests skipped.\n\n")
-        f.write(
-            "Reason: this script currently summarizes aggregate benchmark metrics, "
-            "but it does not yet persist paired per-sample outputs required for valid "
-            "significance testing.\n"
-        )
+        f.write("Method: paired sign-flip permutation test on aligned per-sample errors.\n")
+        f.write("Interpretation: lower is better; a negative mean delta means the first model has lower error.\n\n")
+
+        wrote_results = False
+        for metric in ['trajectory/ade_3s', 'trajectory/fde_3s', 'trajectory/ade_2s', 'trajectory/fde_2s']:
+            available_models = [
+                model_name
+                for model_name in results
+                if metric in results.get(model_name, {})
+                and metric in per_sample_results.get(model_name, {})
+            ]
+            if len(available_models) < 2:
+                continue
+
+            ranked_models = sorted(
+                available_models,
+                key=lambda model_name: results[model_name][metric],
+            )
+            best_model = ranked_models[0]
+
+            f.write(f"{metric}\n")
+            f.write(f"Best aggregate model: {best_model} ({results[best_model][metric]:.4f})\n")
+
+            metric_wrote_results = False
+            for challenger in ranked_models[1:]:
+                try:
+                    mean_delta, p_value, num_pairs = paired_sign_flip_test(
+                        per_sample_results[best_model][metric],
+                        per_sample_results[challenger][metric],
+                    )
+                except ValueError:
+                    continue
+
+                f.write(
+                    f"- {best_model} vs {challenger}: "
+                    f"mean_delta={mean_delta:.6f}, p={p_value:.6f}, n={num_pairs}\n"
+                )
+                wrote_results = True
+                metric_wrote_results = True
+
+            if not metric_wrote_results:
+                f.write("- skipped: not enough finite aligned per-sample values\n")
+            f.write("\n")
+
+        if not wrote_results:
+            f.write("Statistical tests skipped.\n\n")
+            f.write(
+                "Reason: at least two models with aligned per-sample trajectory errors "
+                "are required before the paired test is meaningful.\n"
+            )
 
     print(f"Saved statistical tests: {txt_path}")
 
@@ -672,10 +779,11 @@ def main():
 
     # Evaluate all models
     all_results = {}
+    per_sample_results = {}
 
     for model_name, checkpoint_path in zip(args.models, args.checkpoints):
         try:
-            metrics = evaluate_model(
+            metrics, model_per_sample_metrics = evaluate_model(
                 model_name,
                 checkpoint_path,
                 train_loader,
@@ -684,6 +792,7 @@ def main():
                 device,
             )
             all_results[model_name] = metrics
+            per_sample_results[model_name] = model_per_sample_metrics
 
             print(f"\nResults for {model_name}:")
             for k, v in metrics.items():
@@ -700,7 +809,7 @@ def main():
     # Generate comparison artifacts
     create_comparison_table(all_results, output_path)
     create_comparison_plots(all_results, output_path)
-    run_statistical_tests(all_results, output_path)
+    run_statistical_tests(all_results, per_sample_results, output_path)
 
     print(f"\n{'=' * 60}")
     print(f"Evaluation complete! Results saved to: {output_path}")

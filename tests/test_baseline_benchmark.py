@@ -3,8 +3,10 @@ import torch
 from src.evaluation.baseline_benchmark import (
     collect_probe_targets,
     compute_bev_classification_metrics,
+    compute_trajectory_horizon_errors,
     compute_trajectory_horizon_metrics,
     fit_ridge_probe,
+    paired_sign_flip_test,
     predict_ridge_probe,
 )
 
@@ -56,6 +58,40 @@ def test_compute_trajectory_horizon_metrics_respects_valid_mask():
     assert metrics["trajectory/fde_2s"] == 0.5
 
 
+def test_compute_trajectory_horizon_errors_returns_per_sample_vectors():
+    predictions = torch.tensor(
+        [
+            [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
+            [[0.0, 0.0], [2.0, 0.0], [9.0, 9.0], [9.0, 9.0]],
+        ]
+    )
+    targets = torch.tensor(
+        [
+            [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]],
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+        ]
+    )
+    valid_mask = torch.tensor(
+        [
+            [True, True, True, True],
+            [True, True, False, False],
+        ]
+    )
+
+    errors = compute_trajectory_horizon_errors(
+        predictions,
+        targets,
+        valid_mask,
+        sampling_rate=2.0,
+        horizons=(1.0, 2.0),
+    )
+
+    assert torch.allclose(errors["trajectory/ade_1s"], torch.tensor([0.0, 0.5]))
+    assert torch.allclose(errors["trajectory/fde_1s"], torch.tensor([0.0, 1.0]))
+    assert torch.allclose(errors["trajectory/ade_2s"], torch.tensor([0.0, 0.5]))
+    assert torch.allclose(errors["trajectory/fde_2s"], torch.tensor([0.0, 1.0]))
+
+
 def test_collect_probe_targets_reads_collated_fields():
     batch = {
         "trajectory_ego": torch.zeros(2, 6, 2),
@@ -77,3 +113,19 @@ def test_compute_bev_classification_metrics():
     assert metrics["bev/miou"] == 1.0
     assert metrics["bev/precision"] == 1.0
     assert metrics["bev/recall"] == 1.0
+
+
+def test_paired_sign_flip_test_detects_nonzero_delta():
+    metric_a = torch.tensor([0.2, 0.3, 0.4, 0.5])
+    metric_b = torch.tensor([0.4, 0.5, 0.6, 0.7])
+
+    observed_delta, p_value, num_pairs = paired_sign_flip_test(
+        metric_a,
+        metric_b,
+        num_permutations=2048,
+        seed=7,
+    )
+
+    assert observed_delta < 0.0
+    assert p_value < 0.2
+    assert num_pairs == 4

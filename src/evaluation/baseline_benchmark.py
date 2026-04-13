@@ -52,7 +52,57 @@ def compute_trajectory_horizon_metrics(
     sampling_rate: float = 2.0,
     horizons: Iterable[float] = (1.0, 2.0, 3.0),
 ) -> Dict[str, float]:
-    """Compute ADE/FDE metrics at requested time horizons."""
+    """Compute mean ADE/FDE metrics at requested time horizons."""
+    predictions = predictions.float()
+    targets = targets.float()
+    valid_mask = valid_mask.bool()
+
+    if predictions.shape != targets.shape:
+        raise ValueError("predictions and targets must have matching shape")
+    if valid_mask.shape != predictions.shape[:2]:
+        raise ValueError("valid_mask must have shape (B, T)")
+
+    distances = torch.norm(predictions - targets, dim=-1)
+    horizon_errors = compute_trajectory_horizon_errors(
+        predictions,
+        targets,
+        valid_mask,
+        sampling_rate=sampling_rate,
+        horizons=horizons,
+    )
+
+    metrics = {}
+    total_steps = predictions.size(1)
+    for horizon in horizons:
+        steps = max(1, min(total_steps, int(round(horizon * sampling_rate))))
+        horizon_mask = valid_mask[:, :steps]
+        horizon_distances = distances[:, :steps]
+        horizon_suffix = f"{int(horizon)}s" if float(horizon).is_integer() else f"{horizon:.1f}s"
+
+        if horizon_mask.any():
+            metrics[f"trajectory/ade_{horizon_suffix}"] = (
+                horizon_distances.masked_select(horizon_mask).mean().item()
+            )
+        else:
+            metrics[f"trajectory/ade_{horizon_suffix}"] = float("nan")
+
+        fde_values = horizon_errors[f"trajectory/fde_{horizon_suffix}"]
+        finite_fde = fde_values[torch.isfinite(fde_values)]
+        metrics[f"trajectory/fde_{horizon_suffix}"] = (
+            finite_fde.mean().item() if finite_fde.numel() > 0 else float("nan")
+        )
+
+    return metrics
+
+
+def compute_trajectory_horizon_errors(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    valid_mask: torch.Tensor,
+    sampling_rate: float = 2.0,
+    horizons: Iterable[float] = (1.0, 2.0, 3.0),
+) -> Dict[str, torch.Tensor]:
+    """Compute per-sample ADE/FDE errors at requested time horizons."""
     predictions = predictions.float()
     targets = targets.float()
     valid_mask = valid_mask.bool()
@@ -70,27 +120,77 @@ def compute_trajectory_horizon_metrics(
         steps = max(1, min(total_steps, int(round(horizon * sampling_rate))))
         horizon_mask = valid_mask[:, :steps]
         horizon_distances = distances[:, :steps]
+        ade = torch.full(
+            (predictions.size(0),),
+            float("nan"),
+            dtype=horizon_distances.dtype,
+        )
+        fde = torch.full(
+            (predictions.size(0),),
+            float("nan"),
+            dtype=horizon_distances.dtype,
+        )
 
-        if horizon_mask.any():
-            ade = horizon_distances.masked_select(horizon_mask).mean().item()
-        else:
-            ade = float("nan")
-
-        final_errors = []
         for batch_idx in range(predictions.size(0)):
             valid_steps = torch.nonzero(horizon_mask[batch_idx], as_tuple=False).flatten()
             if valid_steps.numel() == 0:
                 continue
-            final_idx = valid_steps[-1]
-            final_errors.append(horizon_distances[batch_idx, final_idx])
-
-        fde = torch.stack(final_errors).mean().item() if final_errors else float("nan")
+            ade[batch_idx] = horizon_distances[batch_idx, valid_steps].mean()
+            fde[batch_idx] = horizon_distances[batch_idx, valid_steps[-1]]
 
         horizon_suffix = f"{int(horizon)}s" if float(horizon).is_integer() else f"{horizon:.1f}s"
         metrics[f"trajectory/ade_{horizon_suffix}"] = ade
         metrics[f"trajectory/fde_{horizon_suffix}"] = fde
 
     return metrics
+
+
+def paired_sign_flip_test(
+    metric_a: torch.Tensor,
+    metric_b: torch.Tensor,
+    num_permutations: int = 4096,
+    seed: int = 0,
+    chunk_size: int = 256,
+) -> Tuple[float, float, int]:
+    """Run a paired sign-flip permutation test on two aligned metric vectors."""
+    metric_a = torch.as_tensor(metric_a, dtype=torch.float64).flatten()
+    metric_b = torch.as_tensor(metric_b, dtype=torch.float64).flatten()
+
+    if metric_a.shape != metric_b.shape:
+        raise ValueError("paired metric vectors must have the same shape")
+
+    finite_mask = torch.isfinite(metric_a) & torch.isfinite(metric_b)
+    deltas = metric_a[finite_mask] - metric_b[finite_mask]
+    num_pairs = int(deltas.numel())
+
+    if num_pairs == 0:
+        raise ValueError("paired test requires at least one finite paired observation")
+
+    observed_delta = deltas.mean().item()
+    if torch.allclose(deltas, torch.zeros_like(deltas)):
+        return observed_delta, 1.0, num_pairs
+
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+
+    extreme_count = 0
+    permutations_remaining = num_permutations
+    while permutations_remaining > 0:
+        current_chunk = min(chunk_size, permutations_remaining)
+        random_bits = torch.randint(
+            0,
+            2,
+            (current_chunk, num_pairs),
+            generator=generator,
+            dtype=torch.int64,
+        )
+        signs = random_bits.mul(2).sub(1).to(torch.float64)
+        permuted = (signs * deltas.unsqueeze(0)).mean(dim=1).abs()
+        extreme_count += int((permuted >= abs(observed_delta)).sum().item())
+        permutations_remaining -= current_chunk
+
+    p_value = (extreme_count + 1) / (num_permutations + 1)
+    return observed_delta, p_value, num_pairs
 
 
 def collect_probe_targets(batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:

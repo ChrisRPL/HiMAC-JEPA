@@ -25,12 +25,23 @@ def test_comparison_artifacts_handle_missing_metrics(tmp_path):
             "model/inference_time_ms": 8.5,
         },
     }
+    per_sample_metrics = {
+        "camera_only": {
+            "trajectory/ade_3s": [1.4, 1.6, 1.5],
+            "trajectory/fde_3s": [2.1, 2.4, 2.3],
+        },
+        "himac_jepa": {
+            "trajectory/ade_3s": [1.0, 1.1, 1.2],
+            "trajectory/fde_3s": [1.6, 1.8, 1.7],
+        },
+    }
 
     create_comparison_table(results, tmp_path)
     create_comparison_plots(results, tmp_path)
-    run_statistical_tests(results, tmp_path)
+    run_statistical_tests(results, per_sample_metrics, tmp_path)
 
     assert (tmp_path / "metrics.csv").exists()
+    assert (tmp_path / "per_sample_metrics.csv").exists()
     assert (tmp_path / "comparison_table.txt").exists()
     assert (tmp_path / "comparison_table.tex").exists()
     assert (tmp_path / "statistical_tests.txt").exists()
@@ -39,8 +50,37 @@ def test_comparison_artifacts_handle_missing_metrics(tmp_path):
 
 
 def test_statistical_tests_file_is_honest(tmp_path):
-    run_statistical_tests({}, tmp_path)
+    run_statistical_tests({}, {}, tmp_path)
 
     contents = (tmp_path / "statistical_tests.txt").read_text()
     assert "skipped" in contents.lower()
-    assert "paired per-sample outputs" in contents
+    assert "aligned per-sample trajectory errors" in contents
+
+
+def test_statistical_tests_report_paired_trajectory_results(tmp_path):
+    results = {
+        "camera_only": {
+            "trajectory/ade_3s": 1.5,
+            "trajectory/fde_3s": 2.3,
+        },
+        "himac_jepa": {
+            "trajectory/ade_3s": 1.1,
+            "trajectory/fde_3s": 1.7,
+        },
+    }
+    per_sample_metrics = {
+        "camera_only": {
+            "trajectory/ade_3s": [1.6, 1.5, 1.4, 1.5],
+            "trajectory/fde_3s": [2.5, 2.3, 2.1, 2.3],
+        },
+        "himac_jepa": {
+            "trajectory/ade_3s": [1.2, 1.1, 1.0, 1.1],
+            "trajectory/fde_3s": [1.9, 1.7, 1.5, 1.7],
+        },
+    }
+
+    run_statistical_tests(results, per_sample_metrics, tmp_path)
+
+    contents = (tmp_path / "statistical_tests.txt").read_text()
+    assert "paired sign-flip permutation test" in contents.lower()
+    assert "himac_jepa vs camera_only" in contents

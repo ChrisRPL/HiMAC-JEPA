@@ -365,30 +365,33 @@ python scripts/evaluate_baselines.py \
 
 **Outputs:**
 - `metrics.csv`: Raw metrics for all models
+- `per_sample_metrics.csv`: Aligned per-sample trajectory errors used for paired tests
 - `comparison_table.txt`: Human-readable comparison table
 - `comparison_table.tex`: LaTeX table for papers
 - `plots/*.png`: Comparison plots for metrics that are actually available
-- `statistical_tests.txt`: Explicit note that significance tests are skipped until paired per-sample outputs are logged
+- `statistical_tests.txt`: Paired trajectory significance tests when at least two models have aligned per-sample trajectory errors
 
 **Current comparison contract:**
 - Baselines: trajectory probe metrics + model efficiency metrics
 - HiMAC-JEPA: direct trajectory metrics, direct BEV metrics, and model efficiency metrics
-- Motion metrics and significance tests: intentionally skipped for now
+- Trajectory significance tests: available from aligned per-sample validation errors
+- Motion metrics: intentionally skipped for now
 
 ---
 
 ## Statistical Significance
 
-The checked-in comparison script does **not** run significance tests yet.
+The checked-in comparison script now runs **paired trajectory significance tests** when at least two evaluated models share aligned per-sample trajectory errors.
 
-Why:
-- the script currently summarizes aggregate benchmark metrics
-- it does not yet persist paired per-sample outputs for each model
-- without paired outputs, t-tests or Wilcoxon tests would be misleading
+Current method:
+- paired sign-flip permutation test
+- inputs: per-sample validation ADE/FDE vectors from the same sample order
+- comparison style: best aggregate model vs the rest for each reported trajectory horizon
 
-Next honest step:
-- save per-sample trajectory and BEV outputs during evaluation
-- then add paired statistical tests on top of those artifacts
+Still missing:
+- BEV significance testing
+- motion significance testing
+- broader paired artifact logging beyond trajectory errors
 
 ---
 
