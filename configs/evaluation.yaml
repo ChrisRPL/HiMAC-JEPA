@@ -34,6 +34,8 @@ metrics:
     - bev_miou
     - bev_precision
     - bev_recall
+    - motion_ade
+    - motion_fde
 
 # Weights & Biases settings
 wandb:

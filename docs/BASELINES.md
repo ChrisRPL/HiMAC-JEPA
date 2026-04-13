@@ -245,8 +245,9 @@ Current checked-in benchmark coverage:
 - Tests spatial understanding of scene
 
 ### 3. Motion Prediction
-- **Current status**: not reported by the checked-in comparison script yet
-- Reason: baseline evaluation currently does not persist the paired per-sample outputs needed for honest agent-level motion metrics
+- **Direct HiMAC evaluation**: motion ADE/FDE is now reported for the fixed-width motion head
+- **Baseline status**: not reported by the checked-in comparison script yet
+- Reason: the fixed-width motion head and frozen-probe baselines still need a shared agent-selection contract before a fair cross-model comparison
 
 ### 4. Model Efficiency
 - **Number of parameters**

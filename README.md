@@ -19,7 +19,7 @@ The architecture consists of several key components:
 5.  **Uncertainty Quantification**: Explicitly outputs distribution parameters ($\mu, \sigma$) to quantify prediction confidence.
 
 ## Current Status (April 2026)
-- Core training scaffold is stable and regression-tested. Current branch tip passed `pytest -q` with **211 passed, 66 skipped**.
+- Core training scaffold is stable and regression-tested. Current branch tip passed `pytest -q` with **214 passed, 66 skipped**.
 - The active JEPA path now includes:
   - spatio-temporal masking across camera, radar, and temporal context
   - an **observation-only EMA teacher** for target latents
@@ -27,11 +27,11 @@ The architecture consists of several key components:
 - The benchmark path now includes:
   - label-backed trajectory evaluation for all compared models
   - frozen-latent BEV probe evaluation for baselines
-  - direct trajectory and BEV evaluation for HiMAC-JEPA
+  - direct trajectory, motion, and BEV evaluation for HiMAC-JEPA
   - aligned per-sample trajectory errors plus paired trajectory significance tests
 - The repo is ready for controlled research iterations on objective design and temporal prediction.
 - The repo is **not benchmark-complete yet**:
-  - motion evaluation is still partial
+  - motion evaluation now reports direct ADE/FDE, but not detection-style mAP
   - temporal-consistency evaluation is still scaffolded
   - action extraction still includes heuristic / placeholder components
   - no benchmark table on real nuScenes runs is checked into the repo yet
@@ -172,7 +172,7 @@ python scripts/evaluate.py evaluation.checkpoint_path=checkpoints/best_model.pth
 *Downstream Metrics (task performance):*
 - **Trajectory ADE/FDE**: Average and final displacement errors for trajectory prediction
 - **BEV Segmentation mIoU**: Mean intersection over union for bird's-eye-view segmentation
-- **Motion Prediction mAP**: Mean average precision at different distance thresholds
+- **Motion Prediction ADE/FDE**: Direct multi-agent displacement error for the fixed-width motion head
 
 ### Temporal Sequence Training
 
@@ -452,8 +452,8 @@ Trajectory Prediction (ADE ↓):
 BEV Segmentation (mIoU ↑):
   HiMAC-JEPA > V-JEPA > Camera-Only > I-JEPA > LiDAR-Only > Radar-Only
 
-Motion Prediction (mAP ↑):
-  HiMAC-JEPA > V-JEPA > LiDAR-Only > I-JEPA > Camera-Only > Radar-Only
+Motion Prediction (ADE ↓):
+  HiMAC-JEPA < V-JEPA < LiDAR-Only < I-JEPA < Camera-Only < Radar-Only
 
 Inference Time (ms ↓):
   Radar-Only < Camera-Only < LiDAR-Only < I-JEPA < V-JEPA < HiMAC-JEPA

@@ -56,6 +56,56 @@ class DownstreamEvaluator:
 
         return prediction, target, valid_mask
 
+    def _reshape_motion_prediction(
+        self,
+        prediction: torch.Tensor,
+        num_steps: int,
+    ) -> torch.Tensor:
+        """Reshape flattened motion outputs into (B, A, T, 2)."""
+        if prediction.dim() == 4:
+            return prediction
+
+        if prediction.dim() != 2 or prediction.size(-1) % (num_steps * 2) != 0:
+            raise ValueError(
+                f"Unexpected motion prediction shape {tuple(prediction.shape)} for {num_steps} steps"
+            )
+
+        num_agents = prediction.size(-1) // (num_steps * 2)
+        return prediction.view(prediction.size(0), num_agents, num_steps, 2)
+
+    def _align_motion_targets(
+        self,
+        prediction: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: torch.Tensor,
+        agent_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Align fixed-width motion predictions with padded closest-agent labels."""
+        target = target.to(prediction.device)
+        valid_mask = valid_mask.to(prediction.device).bool()
+
+        if target.dim() != 4 or valid_mask.dim() != 3:
+            raise ValueError("motion targets must have shape (B, A, T, 2) and masks (B, A, T)")
+
+        prediction = self._reshape_motion_prediction(prediction, num_steps=target.size(2))
+        max_agents = min(prediction.size(1), target.size(1))
+        max_steps = min(prediction.size(2), target.size(2))
+
+        prediction = prediction[:, :max_agents, :max_steps]
+        target = target[:, :max_agents, :max_steps]
+        valid_mask = valid_mask[:, :max_agents, :max_steps]
+
+        if agent_mask is None:
+            agent_mask = torch.ones(
+                prediction.shape[:2],
+                device=prediction.device,
+                dtype=torch.bool,
+            )
+        else:
+            agent_mask = agent_mask[:, :max_agents].to(prediction.device).bool()
+
+        return prediction, target, valid_mask, agent_mask
+
     def trajectory_metrics(
         self,
         horizon=30,
@@ -184,6 +234,67 @@ class DownstreamEvaluator:
             'downstream/bev_recall': recall,
         }
 
+    def motion_metrics(self) -> Dict[str, float]:
+        """
+        Compute multi-agent motion prediction metrics.
+
+        Uses the closest padded agents from the evaluation batch and reports ADE/FDE
+        over the fixed-width motion head outputs.
+        """
+        total_ade = 0.0
+        total_fde = 0.0
+        num_agents = 0
+
+        with torch.no_grad():
+            for batch in self.dataloader:
+                camera = batch['camera'].to(self.device)
+                lidar = batch['lidar'].to(self.device)
+                radar = batch['radar'].to(self.device)
+                strategic = batch['strategic_action'].to(self.device)
+                tactical = batch['tactical_action'].to(self.device)
+
+                _, _, _, motion_pred, _ = self.model(
+                    camera, lidar, radar, strategic, tactical, masks=None
+                )
+
+                gt_motion = batch.get('motion_future_trajectories')
+                motion_valid_mask = batch.get('motion_valid_mask')
+                motion_agent_mask = batch.get('motion_agent_mask')
+                if gt_motion is None or motion_valid_mask is None:
+                    raise ValueError(
+                        "motion_metrics requires collated motion targets in the evaluation batch"
+                    )
+
+                motion_pred, gt_motion, motion_valid_mask, motion_agent_mask = self._align_motion_targets(
+                    motion_pred,
+                    gt_motion,
+                    motion_valid_mask,
+                    motion_agent_mask,
+                )
+
+                batch_ade = self._compute_motion_ade(
+                    motion_pred,
+                    gt_motion,
+                    motion_valid_mask,
+                    motion_agent_mask,
+                )
+                batch_fde = self._compute_motion_fde(
+                    motion_pred,
+                    gt_motion,
+                    motion_valid_mask,
+                    motion_agent_mask,
+                )
+
+                active_agents = int(motion_agent_mask.sum().item())
+                total_ade += batch_ade * active_agents
+                total_fde += batch_fde * active_agents
+                num_agents += active_agents
+
+        return {
+            'downstream/motion_ade': total_ade / num_agents if num_agents > 0 else 0.0,
+            'downstream/motion_fde': total_fde / num_agents if num_agents > 0 else 0.0,
+        }
+
     def _compute_ade(
         self,
         pred: torch.Tensor,
@@ -304,6 +415,63 @@ class DownstreamEvaluator:
 
         return np.array(iou_per_class)
 
+    def _compute_motion_ade(
+        self,
+        pred: torch.Tensor,
+        gt: torch.Tensor,
+        valid_mask: torch.Tensor,
+        agent_mask: Optional[torch.Tensor] = None,
+    ) -> float:
+        """Compute ADE across valid agent trajectories."""
+        if pred.numel() == 0 or gt.numel() == 0:
+            return 0.0
+
+        distances = torch.norm(pred - gt, dim=-1)
+        valid_mask = valid_mask.bool()
+        if agent_mask is not None:
+            valid_mask = valid_mask & agent_mask.bool().unsqueeze(-1)
+
+        valid_count = valid_mask.sum()
+        if valid_count.item() == 0:
+            return 0.0
+
+        return distances.masked_select(valid_mask).mean().item()
+
+    def _compute_motion_fde(
+        self,
+        pred: torch.Tensor,
+        gt: torch.Tensor,
+        valid_mask: torch.Tensor,
+        agent_mask: Optional[torch.Tensor] = None,
+    ) -> float:
+        """Compute FDE across valid agent trajectories."""
+        if pred.numel() == 0 or gt.numel() == 0:
+            return 0.0
+
+        valid_mask = valid_mask.bool()
+        if agent_mask is None:
+            agent_mask = torch.ones(pred.shape[:2], device=pred.device, dtype=torch.bool)
+        else:
+            agent_mask = agent_mask.bool()
+
+        final_errors = []
+        for batch_idx in range(pred.size(0)):
+            for agent_idx in range(pred.size(1)):
+                if not agent_mask[batch_idx, agent_idx]:
+                    continue
+                agent_valid = torch.nonzero(valid_mask[batch_idx, agent_idx], as_tuple=False).flatten()
+                if agent_valid.numel() == 0:
+                    continue
+                final_idx = agent_valid[-1]
+                final_errors.append(
+                    torch.norm(pred[batch_idx, agent_idx, final_idx] - gt[batch_idx, agent_idx, final_idx])
+                )
+
+        if not final_errors:
+            return 0.0
+
+        return torch.stack(final_errors).mean().item()
+
     def _compute_confusion_matrix(
         self,
         pred: torch.Tensor,
@@ -366,5 +534,10 @@ class DownstreamEvaluator:
                 num_classes=config.downstream.bev_classes
             )
             results.update(bev_results)
+
+        if any(m.startswith('motion') for m in config.metrics.downstream):
+            print("  Computing motion prediction metrics...")
+            motion_results = self.motion_metrics()
+            results.update(motion_results)
 
         return results

@@ -10,9 +10,10 @@ class _DummyEvalModel:
 
 
 class _ConstantPredictionModel:
-    def __init__(self, trajectory, bev_logits):
+    def __init__(self, trajectory, bev_logits, motion=None):
         self.trajectory = trajectory
         self.bev_logits = bev_logits
+        self.motion = motion
 
     def eval(self):
         return self
@@ -23,7 +24,10 @@ class _ConstantPredictionModel:
         bev_logits = self.bev_logits[:batch_size].clone()
         latent = torch.zeros(batch_size, 4)
         log_var = torch.zeros(batch_size, 4)
-        motion = torch.zeros(batch_size, 6)
+        if self.motion is None:
+            motion = torch.zeros(batch_size, 6)
+        else:
+            motion = self.motion[:batch_size].clone()
         return latent, log_var, trajectory, motion, bev_logits
 
 
@@ -298,6 +302,114 @@ class TestDownstreamMetrics:
         assert metrics["downstream/bev_miou"] == pytest.approx(1.0)
         assert metrics["downstream/bev_precision"] == pytest.approx(1.0)
         assert metrics["downstream/bev_recall"] == pytest.approx(1.0)
+
+    def test_motion_alignment_reshapes_fixed_width_head(self):
+        from src.evaluation.downstream_metrics import DownstreamEvaluator
+
+        evaluator = DownstreamEvaluator(_DummyEvalModel(), None, 'cpu')
+
+        prediction = torch.arange(24, dtype=torch.float32).view(2, 12)
+        target = torch.zeros(2, 1, 3, 2)
+        valid_mask = torch.ones(2, 1, 3, dtype=torch.bool)
+        agent_mask = torch.ones(2, 1, dtype=torch.bool)
+
+        aligned_pred, aligned_target, aligned_valid, aligned_agents = evaluator._align_motion_targets(
+            prediction,
+            target,
+            valid_mask,
+            agent_mask,
+        )
+
+        assert aligned_pred.shape == (2, 1, 3, 2)
+        assert torch.equal(aligned_valid, valid_mask)
+        assert torch.equal(aligned_agents, agent_mask)
+        assert torch.equal(aligned_target, target)
+
+    def test_motion_metrics_use_collated_targets(self):
+        from src.evaluation.downstream_metrics import DownstreamEvaluator
+
+        batch = {
+            "camera": torch.zeros(1, 3, 4, 4),
+            "lidar": torch.zeros(1, 8, 3),
+            "radar": torch.zeros(1, 1, 4, 4),
+            "strategic_action": torch.zeros(1, dtype=torch.long),
+            "tactical_action": torch.zeros(1, 3),
+            "motion_future_trajectories": torch.tensor(
+                [[
+                    [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                    [[0.0, 1.0], [0.0, 2.0], [0.0, 0.0]],
+                ]],
+                dtype=torch.float32,
+            ),
+            "motion_valid_mask": torch.tensor(
+                [[[True, True, True], [True, True, False]]]
+            ),
+            "motion_agent_mask": torch.tensor([[True, True]]),
+        }
+
+        motion_pred = torch.tensor(
+            [[
+                0.0, 0.0, 1.0, 0.0, 2.0, 0.0,
+                0.0, 1.0, 0.0, 3.0, 9.0, 9.0,
+            ]],
+            dtype=torch.float32,
+        )
+        evaluator = DownstreamEvaluator(
+            _ConstantPredictionModel(
+                trajectory=torch.zeros(1, 6),
+                bev_logits=torch.zeros(1, 2, 2, 2),
+                motion=motion_pred,
+            ),
+            [batch],
+            "cpu",
+        )
+
+        metrics = evaluator.motion_metrics()
+
+        assert metrics["downstream/motion_ade"] == pytest.approx(0.2)
+        assert metrics["downstream/motion_fde"] == pytest.approx(0.5)
+
+    def test_run_all_includes_motion_metrics_when_requested(self):
+        from types import SimpleNamespace
+        from src.evaluation.downstream_metrics import DownstreamEvaluator
+
+        batch = {
+            "camera": torch.zeros(1, 3, 4, 4),
+            "lidar": torch.zeros(1, 8, 3),
+            "radar": torch.zeros(1, 1, 4, 4),
+            "strategic_action": torch.zeros(1, dtype=torch.long),
+            "tactical_action": torch.zeros(1, 3),
+            "motion_future_trajectories": torch.tensor(
+                [[[[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]]]],
+                dtype=torch.float32,
+            ),
+            "motion_valid_mask": torch.tensor([[[True, True, True]]]),
+            "motion_agent_mask": torch.tensor([[True]]),
+        }
+        motion_pred = torch.tensor([[0.0, 0.0, 1.0, 0.0, 2.0, 0.0]], dtype=torch.float32)
+        evaluator = DownstreamEvaluator(
+            _ConstantPredictionModel(
+                trajectory=torch.zeros(1, 6),
+                bev_logits=torch.zeros(1, 2, 2, 2),
+                motion=motion_pred,
+            ),
+            [batch],
+            "cpu",
+        )
+
+        config = SimpleNamespace(
+            metrics=SimpleNamespace(downstream=["motion_ade", "motion_fde"]),
+            downstream=SimpleNamespace(
+                trajectory_horizon=3,
+                trajectory_num_modes=1,
+                bev_classes=2,
+            ),
+        )
+
+        results = evaluator.run_all(config)
+
+        assert results["downstream/motion_ade"] == pytest.approx(0.0)
+        assert results["downstream/motion_fde"] == pytest.approx(0.0)
 
 
 class TestMetricsEdgeCases:
