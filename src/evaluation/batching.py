@@ -25,6 +25,33 @@ def _extract_ego_trajectory(labels: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
     return trajectory_tensor, valid_mask
 
 
+def _extract_motion_targets(labels: Dict) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Convert motion label dict into padded-ready tensors."""
+    motion_dict = labels.get("motion", {})
+    current_states = np.asarray(motion_dict.get("current_states", np.zeros((0, 4))), dtype=np.float32)
+    future_trajectories = np.asarray(
+        motion_dict.get("future_trajectories", np.zeros((0, 0, 2))),
+        dtype=np.float32,
+    )
+    valid_masks = np.asarray(
+        motion_dict.get("valid_masks", np.zeros((0, 0), dtype=bool)),
+        dtype=bool,
+    )
+
+    if current_states.ndim != 2:
+        current_states = current_states.reshape(-1, 4)
+    if future_trajectories.ndim != 3:
+        future_trajectories = future_trajectories.reshape(0, 0, 2)
+    if valid_masks.ndim != 2:
+        valid_masks = valid_masks.reshape(0, 0)
+
+    return (
+        torch.from_numpy(current_states),
+        torch.from_numpy(future_trajectories),
+        torch.from_numpy(valid_masks),
+    )
+
+
 def collate_evaluation_batch(samples: List[Dict]) -> Dict:
     """Collate nuScenes evaluation samples while normalizing label targets."""
     collated = default_collate(
@@ -37,6 +64,9 @@ def collate_evaluation_batch(samples: List[Dict]) -> Dict:
     trajectories = []
     valid_masks = []
     bev_labels = []
+    motion_current_states = []
+    motion_future_trajectories = []
+    motion_valid_masks = []
 
     for sample in samples:
         labels = sample.get("labels", {})
@@ -46,6 +76,11 @@ def collate_evaluation_batch(samples: List[Dict]) -> Dict:
 
         if "bev" in labels:
             bev_labels.append(torch.as_tensor(labels["bev"], dtype=torch.long))
+
+        motion_current, motion_future, motion_valid = _extract_motion_targets(labels)
+        motion_current_states.append(motion_current)
+        motion_future_trajectories.append(motion_future)
+        motion_valid_masks.append(motion_valid)
 
     if trajectories:
         max_steps = max((trajectory.size(0) for trajectory in trajectories), default=0)
@@ -64,5 +99,45 @@ def collate_evaluation_batch(samples: List[Dict]) -> Dict:
 
     if bev_labels:
         collated["bev_label"] = torch.stack(bev_labels, dim=0)
+
+    if motion_current_states:
+        max_agents = max((states.size(0) for states in motion_current_states), default=0)
+        max_motion_steps = max((traj.size(1) for traj in motion_future_trajectories), default=0)
+
+        padded_current_states = torch.zeros(len(samples), max_agents, 4, dtype=torch.float32)
+        padded_future_trajectories = torch.zeros(
+            len(samples),
+            max_agents,
+            max_motion_steps,
+            2,
+            dtype=torch.float32,
+        )
+        padded_motion_masks = torch.zeros(
+            len(samples),
+            max_agents,
+            max_motion_steps,
+            dtype=torch.bool,
+        )
+        motion_agent_mask = torch.zeros(len(samples), max_agents, dtype=torch.bool)
+
+        for idx, (current_states, future_trajectory, valid_mask) in enumerate(
+            zip(motion_current_states, motion_future_trajectories, motion_valid_masks)
+        ):
+            num_agents = current_states.size(0)
+            num_steps = future_trajectory.size(1) if future_trajectory.ndim == 3 else 0
+            if num_agents == 0:
+                continue
+
+            padded_current_states[idx, :num_agents] = current_states
+            motion_agent_mask[idx, :num_agents] = True
+
+            if num_steps > 0:
+                padded_future_trajectories[idx, :num_agents, :num_steps] = future_trajectory
+                padded_motion_masks[idx, :num_agents, :num_steps] = valid_mask
+
+        collated["motion_current_states"] = padded_current_states
+        collated["motion_future_trajectories"] = padded_future_trajectories
+        collated["motion_valid_mask"] = padded_motion_masks
+        collated["motion_agent_mask"] = motion_agent_mask
 
     return collated

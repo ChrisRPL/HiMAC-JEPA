@@ -356,6 +356,23 @@ class TestEvaluationBatching:
                         3.0: np.array([[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], dtype=np.float32),
                     },
                     "bev": np.ones((2, 2), dtype=np.uint8),
+                    "motion": {
+                        "current_states": np.array([[1.0, 0.0, 0.5, 0.0], [2.0, 1.0, 0.0, 0.5]], dtype=np.float32),
+                        "future_trajectories": np.array(
+                            [
+                                [[1.5, 0.0], [2.0, 0.0], [2.5, 0.0]],
+                                [[2.0, 1.5], [2.0, 2.0], [0.0, 0.0]],
+                            ],
+                            dtype=np.float32,
+                        ),
+                        "valid_masks": np.array(
+                            [
+                                [True, True, True],
+                                [True, True, False],
+                            ],
+                            dtype=bool,
+                        ),
+                    },
                 },
             },
             {
@@ -370,6 +387,14 @@ class TestEvaluationBatching:
                         3.0: np.array([[0.5, 0.5], [1.0, 1.0]], dtype=np.float32),
                     },
                     "bev": np.zeros((2, 2), dtype=np.uint8),
+                    "motion": {
+                        "current_states": np.array([[0.5, -0.5, 0.1, 0.2]], dtype=np.float32),
+                        "future_trajectories": np.array(
+                            [[[0.7, -0.3], [0.8, -0.1]]],
+                            dtype=np.float32,
+                        ),
+                        "valid_masks": np.array([[True, True]], dtype=bool),
+                    },
                 },
             },
         ]
@@ -381,3 +406,10 @@ class TestEvaluationBatching:
         assert torch.equal(batch["trajectory_valid_mask"][0], torch.tensor([True, True, True]))
         assert torch.equal(batch["trajectory_valid_mask"][1], torch.tensor([True, True, False]))
         assert batch["bev_label"].shape == (2, 2, 2)
+        assert batch["motion_current_states"].shape == (2, 2, 4)
+        assert batch["motion_future_trajectories"].shape == (2, 2, 3, 2)
+        assert batch["motion_valid_mask"].shape == (2, 2, 3)
+        assert batch["motion_agent_mask"].shape == (2, 2)
+        assert torch.equal(batch["motion_agent_mask"][0], torch.tensor([True, True]))
+        assert torch.equal(batch["motion_agent_mask"][1], torch.tensor([True, False]))
+        assert torch.equal(batch["motion_valid_mask"][1, 1], torch.tensor([False, False, False]))
