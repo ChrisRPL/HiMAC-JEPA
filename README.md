@@ -378,7 +378,7 @@ Cache statistics:
 
 HiMAC-JEPA includes 5 baseline models for comprehensive comparison:
 
-**Status note:** baseline training scripts and report formatting are implemented, but current comparison outputs are not yet validated research results. The checked-in evaluation path still contains placeholder metrics.
+**Status note:** baseline training scripts and report formatting are implemented, and the checked-in comparison path is now label-backed for trajectory evaluation. HiMAC-JEPA is scored directly on trajectory and BEV heads where labels exist. Motion metrics and statistical significance tests are still intentionally skipped until the evaluator persists paired per-sample outputs.
 
 **Single-Modal Baselines:**
 1. **Camera-Only**: ResNet18 + LSTM, supervised future frame prediction
@@ -425,14 +425,17 @@ python scripts/evaluate_baselines.py \
     checkpoints/baselines/ijepa/best_model.pth \
     checkpoints/baselines/vjepa/best_model.pth \
     checkpoints/himac_jepa/best_model.pth \
+  --data-dir /path/to/nuscenes \
+  --version v1.0-mini \
+  --label-cache-dir ./cache/labels \
   --output-dir results/baselines
 
 # Results saved to:
 # - results/baselines/metrics.csv             (raw metrics)
 # - results/baselines/comparison_table.txt    (human-readable)
 # - results/baselines/comparison_table.tex    (LaTeX for papers)
-# - results/baselines/plots/*.png             (comparison plots)
-# - results/baselines/statistical_tests.txt   (significance tests)
+# - results/baselines/plots/*.png             (plots for available metrics)
+# - results/baselines/statistical_tests.txt   (explicit skip note until paired outputs are logged)
 ```
 
 **Research Hypothesis: Expected Performance Hierarchy** (not benchmarked yet):
@@ -512,16 +515,16 @@ python train.py data=nuscenes wandb.enabled=true
 - Label extraction and caching pipeline
 
 **Implemented, but still needs honest benchmark validation**
-- Downstream evaluation metrics: interfaces exist, but some paths still use placeholder values
+- Downstream evaluation metrics: trajectory and BEV benchmark paths are label-backed; motion/significance evaluation is still partial
 - Temporal-consistency metric: scaffolded, not yet backed by sequential evaluation
 - nuScenes action extraction: tactical/strategic labels still include heuristic or placeholder logic
-- Baseline comparisons: scripts exist, but no checked-in real benchmark table yet
+- Baseline comparisons: honest evaluation loop exists, but no checked-in real benchmark table yet
 
 **Near-term roadmap**
 1. **Future-action temporal JEPA**
    Student sees planned future actions; teacher stays observation-only. Goal: make the action-conditioning claim real for multi-step prediction.
-2. **Honest nuScenes-mini benchmark**
-   Replace placeholder evaluation with one reproducible benchmark loop so architecture changes can be ranked.
+2. **Checked-in nuScenes-mini benchmark table**
+   Run the honest benchmark loop end-to-end and check in one reproducible comparison table so architecture changes can be ranked.
 3. **Structured JEPA targets**
    Move beyond one pooled latent toward token / slot targets so masking supervises local structure, not just a single global vector.
 

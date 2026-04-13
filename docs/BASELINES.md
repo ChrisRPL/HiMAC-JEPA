@@ -9,7 +9,7 @@ We implement 5 baseline models to demonstrate the advantages of HiMAC-JEPA's app
 1. **Single-Modal Baselines** (3): Show the benefit of multi-modal fusion
 2. **JEPA Baselines** (2): Show the benefit of hierarchical action conditioning
 
-All baselines are trained on the same data, with the same training protocol, and evaluated on the same downstream tasks for fair comparison.
+All baselines are trained on the same data and with the same training protocol. The checked-in benchmark path now uses shared, label-backed nuScenes loaders; frozen trajectory probes for the baseline encoders; and direct trajectory/BEV heads for HiMAC-JEPA where those heads exist.
 
 ---
 
@@ -228,22 +228,24 @@ grad_clip: 1.0
 
 ## Evaluation Metrics
 
-All baselines are evaluated on the same downstream tasks:
+Current checked-in benchmark coverage:
 
 ### 1. Trajectory Prediction
 - **Metrics**: ADE, FDE at 1s, 2s, 3s horizons
 - **Lower is better**
+- **Baselines**: frozen-latent ridge probe trained on the nuScenes train split
+- **HiMAC-JEPA**: direct trajectory head evaluation on the validation split
 - Tests ability to predict ego vehicle motion
 
 ### 2. BEV Segmentation
 - **Metrics**: mIoU, per-class IoU
 - **Higher is better**
+- **Current support**: direct evaluation for HiMAC-JEPA only
 - Tests spatial understanding of scene
 
 ### 3. Motion Prediction
-- **Metrics**: mAP, ADE, FDE for surrounding agents
-- **Higher is better**
-- Tests understanding of multi-agent interactions
+- **Current status**: not reported by the checked-in comparison script yet
+- Reason: baseline evaluation currently does not persist the paired per-sample outputs needed for honest agent-level motion metrics
 
 ### 4. Model Efficiency
 - **Number of parameters**
@@ -355,6 +357,9 @@ python scripts/evaluate_baselines.py \
     checkpoints/baselines/ijepa/best_model.pth \
     checkpoints/baselines/vjepa/best_model.pth \
     checkpoints/himac_jepa/best_model.pth \
+  --data-dir /path/to/nuscenes \
+  --version v1.0-mini \
+  --label-cache-dir ./cache/labels \
   --output-dir results/baselines
 ```
 
@@ -362,19 +367,28 @@ python scripts/evaluate_baselines.py \
 - `metrics.csv`: Raw metrics for all models
 - `comparison_table.txt`: Human-readable comparison table
 - `comparison_table.tex`: LaTeX table for papers
-- `plots/*.png`: Comparison plots (bar charts, radar plot)
-- `statistical_tests.txt`: Statistical significance tests
+- `plots/*.png`: Comparison plots for metrics that are actually available
+- `statistical_tests.txt`: Explicit note that significance tests are skipped until paired per-sample outputs are logged
+
+**Current comparison contract:**
+- Baselines: trajectory probe metrics + model efficiency metrics
+- HiMAC-JEPA: direct trajectory metrics, direct BEV metrics, and model efficiency metrics
+- Motion metrics and significance tests: intentionally skipped for now
 
 ---
 
 ## Statistical Significance
 
-We use paired t-tests and Wilcoxon signed-rank tests to verify that improvements are statistically significant (p < 0.05).
+The checked-in comparison script does **not** run significance tests yet.
 
-**Expected significance:**
-- HiMAC-JEPA vs V-JEPA: p < 0.01 (action conditioning benefit)
-- HiMAC-JEPA vs I-JEPA: p < 0.001 (multi-modal + action benefit)
-- HiMAC-JEPA vs single-modal: p < 0.001 (multi-modal benefit)
+Why:
+- the script currently summarizes aggregate benchmark metrics
+- it does not yet persist paired per-sample outputs for each model
+- without paired outputs, t-tests or Wilcoxon tests would be misleading
+
+Next honest step:
+- save per-sample trajectory and BEV outputs during evaluation
+- then add paired statistical tests on top of those artifacts
 
 ---
 
